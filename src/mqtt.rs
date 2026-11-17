@@ -1,4 +1,4 @@
-use crate::{EventKind, IngestEvent, Registry, valid_position};
+use crate::{EventKind, IngestEvent, Protocol, Registry, valid_position};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde_json::Value;
 use std::sync::Arc;
@@ -149,6 +149,9 @@ pub async fn handle_message(
                     speed_kmh,
                     heading,
                     battery,
+                    device_type: None,
+                    protocol: Some(Protocol::Meshtastic),
+                    serial: None,
                     event: EventKind::Heartbeat,
                 })
                 .await;
@@ -217,8 +220,8 @@ mod tests {
             .unwrap();
 
         let device = registry.device("!0000c001").await.unwrap();
-        assert!((device.lat - -6.2).abs() < 1e-6);
-        assert!((device.lon - 106.8).abs() < 1e-6);
+        assert!((device.lat.unwrap() - -6.2).abs() < 1e-6);
+        assert!((device.lon.unwrap() - 106.8).abs() < 1e-6);
         assert!((device.speed_kmh.unwrap() - 36.0).abs() < 1e-6);
         assert_eq!(device.status, Status::Normal);
     }
@@ -235,6 +238,9 @@ mod tests {
                 speed_kmh: None,
                 heading: None,
                 battery: None,
+                device_type: None,
+                protocol: None,
+                serial: None,
                 event: EventKind::Heartbeat,
             })
             .await;

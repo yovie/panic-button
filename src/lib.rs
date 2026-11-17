@@ -5,8 +5,31 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 
 pub mod mqtt;
+pub mod store;
 
 pub const EVENT_CHANNEL_CAPACITY: usize = 1024;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceType {
+    #[default]
+    PanicButton,
+    Tracker,
+    Gateway,
+    Sensor,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Protocol {
+    #[default]
+    Meshtastic,
+    Http,
+    Simulator,
+    Teltonika,
+    Other,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -22,6 +45,8 @@ pub struct IngestEvent {
     pub device_id: String,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub serial: Option<String>,
     pub lat: f64,
     pub lon: f64,
     #[serde(default)]
@@ -31,7 +56,34 @@ pub struct IngestEvent {
     #[serde(default)]
     pub battery: Option<f64>,
     #[serde(default)]
+    pub device_type: Option<DeviceType>,
+    #[serde(default)]
+    pub protocol: Option<Protocol>,
+    #[serde(default)]
     pub event: EventKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DeviceConfig {
+    pub id: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub device_type: DeviceType,
+    #[serde(default)]
+    pub protocol: Protocol,
+    #[serde(default)]
+    pub serial: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub lat: Option<f64>,
+    #[serde(default)]
+    pub lon: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -45,12 +97,19 @@ pub enum Status {
 pub struct Device {
     pub id: String,
     pub name: String,
-    pub lat: f64,
-    pub lon: f64,
+    pub label: Option<String>,
+    pub device_type: DeviceType,
+    pub protocol: Protocol,
+    pub serial: Option<String>,
+    pub owner: Option<String>,
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
     pub speed_kmh: Option<f64>,
     pub heading: Option<f64>,
     pub battery: Option<f64>,
-    pub last_seen: DateTime<Utc>,
+    pub last_seen: Option<DateTime<Utc>>,
     pub status: Status,
     pub panic_since: Option<DateTime<Utc>>,
 }
@@ -62,6 +121,7 @@ pub enum ServerMessage {
     Update { device: Device },
     Panic { device: Device },
     PanicCleared { device: Device },
+    Removed { id: String },
 }
 
 #[derive(Debug, Default)]
@@ -134,12 +194,19 @@ impl Registry {
                     .clone()
                     .or(default_name)
                     .unwrap_or_else(|| event.device_id.clone()),
-                lat: event.lat,
-                lon: event.lon,
+                label: None,
+                device_type: event.device_type.unwrap_or_default(),
+                protocol: event.protocol.unwrap_or_default(),
+                serial: event.serial.clone(),
+                owner: None,
+                tags: Vec::new(),
+                notes: None,
+                lat: Some(event.lat),
+                lon: Some(event.lon),
                 speed_kmh: event.speed_kmh,
                 heading: event.heading,
                 battery: event.battery,
-                last_seen: now,
+                last_seen: Some(now),
                 status: Status::Normal,
                 panic_since: None,
             });
@@ -147,14 +214,17 @@ impl Registry {
         if let Some(name) = event.name.clone() {
             device.name = name;
         }
-        device.lat = event.lat;
-        device.lon = event.lon;
+        if device.serial.is_none() {
+            device.serial = event.serial.clone();
+        }
+        device.lat = Some(event.lat);
+        device.lon = Some(event.lon);
         device.speed_kmh = event.speed_kmh;
         device.heading = event.heading;
         if event.battery.is_some() {
             device.battery = event.battery;
         }
-        device.last_seen = now;
+        device.last_seen = Some(now);
 
         let mut broadcasts = match event.event {
             EventKind::Panic if device.status != Status::Panic => {
@@ -198,6 +268,61 @@ impl Registry {
         result
     }
 
+    pub async fn register(&self, config: DeviceConfig) -> Device {
+        let mut devices = self.devices.write().await;
+        let device = devices.entry(config.id.clone()).or_insert_with(|| Device {
+            id: config.id.clone(),
+            name: config.id.clone(),
+            label: config.label.clone(),
+            device_type: config.device_type,
+            protocol: config.protocol,
+            serial: config.serial.clone(),
+            owner: config.owner.clone(),
+            tags: config.tags.clone(),
+            notes: config.notes.clone(),
+            lat: config.lat,
+            lon: config.lon,
+            speed_kmh: None,
+            heading: None,
+            battery: None,
+            last_seen: None,
+            status: Status::Normal,
+            panic_since: None,
+        });
+
+        device.label = config.label;
+        device.device_type = config.device_type;
+        device.protocol = config.protocol;
+        device.serial = config.serial;
+        device.owner = config.owner;
+        device.tags = config.tags;
+        device.notes = config.notes;
+        if let (Some(lat), Some(lon)) = (config.lat, config.lon) {
+            device.lat = Some(lat);
+            device.lon = Some(lon);
+        }
+
+        let result = device.clone();
+        drop(devices);
+        let _ = self.tx.send(ServerMessage::Update {
+            device: result.clone(),
+        });
+        result
+    }
+
+    pub async fn remove(&self, id: &str) -> bool {
+        let removed = self.devices.write().await.remove(id);
+        let mut meta = self.meta.write().await;
+        meta.names.remove(id);
+        meta.pending_panics.remove(id);
+        drop(meta);
+
+        if removed.is_some() {
+            let _ = self.tx.send(ServerMessage::Removed { id: id.to_string() });
+        }
+        removed.is_some()
+    }
+
     pub async fn set_name(&self, id: &str, name: &str) {
         self.meta
             .write()
@@ -220,7 +345,7 @@ impl Registry {
         let mut devices = self.devices.write().await;
         if let Some(device) = devices.get_mut(id) {
             device.battery = Some(battery);
-            device.last_seen = Utc::now();
+            device.last_seen = Some(Utc::now());
             let message = ServerMessage::Update {
                 device: device.clone(),
             };
@@ -282,6 +407,29 @@ pub fn valid_position(lat: f64, lon: f64) -> bool {
         && !(lat.abs() < f64::EPSILON && lon.abs() < f64::EPSILON)
 }
 
+pub fn valid_device_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "!-_.:".contains(character))
+}
+
+pub fn normalize_imei(value: &str) -> Option<String> {
+    let compact: String = value
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '-')
+        .collect();
+
+    if matches!(compact.len(), 15 | 16)
+        && compact.chars().all(|character| character.is_ascii_digit())
+    {
+        Some(compact)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,12 +438,30 @@ mod tests {
         IngestEvent {
             device_id: id.to_string(),
             name: None,
+            serial: None,
             lat,
             lon,
             speed_kmh: Some(10.0),
             heading: Some(90.0),
             battery: Some(80.0),
+            device_type: None,
+            protocol: None,
             event: kind,
+        }
+    }
+
+    fn config(id: &str) -> DeviceConfig {
+        DeviceConfig {
+            id: id.to_string(),
+            label: Some("Pos Pantau".to_string()),
+            device_type: DeviceType::Tracker,
+            protocol: Protocol::Http,
+            serial: Some("SN-123".to_string()),
+            owner: Some("Satgas".to_string()),
+            tags: vec!["regu-1".to_string()],
+            notes: Some("unit cadangan".to_string()),
+            lat: None,
+            lon: None,
         }
     }
 
@@ -312,8 +478,20 @@ mod tests {
         let snapshot = registry.snapshot().await;
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].id, "dev-1");
-        assert!((snapshot[0].lat - -6.21).abs() < 1e-9);
+        assert!((snapshot[0].lat.unwrap() - -6.21).abs() < 1e-9);
         assert_eq!(snapshot[0].status, Status::Normal);
+    }
+
+    #[tokio::test]
+    async fn ingest_sets_type_and_protocol_on_creation() {
+        let registry = Registry::new();
+        let mut event = event("dev-1", -6.2, 106.8, EventKind::Heartbeat);
+        event.device_type = Some(DeviceType::Sensor);
+        event.protocol = Some(Protocol::Simulator);
+
+        let device = registry.apply(event).await;
+        assert_eq!(device.device_type, DeviceType::Sensor);
+        assert_eq!(device.protocol, Protocol::Simulator);
     }
 
     #[tokio::test]
@@ -371,11 +549,110 @@ mod tests {
         assert_eq!(device.name, "Tim Alpha");
     }
 
+    #[tokio::test]
+    async fn register_device_without_position() {
+        let registry = Registry::new();
+        let mut rx = registry.subscribe();
+
+        let device = registry.register(config("device-01")).await;
+        assert_eq!(device.label.as_deref(), Some("Pos Pantau"));
+        assert_eq!(device.device_type, DeviceType::Tracker);
+        assert!(device.lat.is_none());
+        assert!(device.last_seen.is_none());
+
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::Update { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn register_updates_metadata_but_keeps_live_state() {
+        let registry = Registry::new();
+        registry
+            .apply(event("device-01", -6.2, 106.8, EventKind::Heartbeat))
+            .await;
+
+        let mut updated = config("device-01");
+        updated.label = Some("Pos Utama".to_string());
+        updated.device_type = DeviceType::PanicButton;
+        let device = registry.register(updated).await;
+
+        assert_eq!(device.label.as_deref(), Some("Pos Utama"));
+        assert_eq!(device.device_type, DeviceType::PanicButton);
+        assert_eq!(device.lat, Some(-6.2));
+        assert!(device.last_seen.is_some());
+    }
+
+    #[tokio::test]
+    async fn label_is_separate_from_reported_name() {
+        let registry = Registry::new();
+        registry.register(config("device-01")).await;
+        registry.set_name("device-01", "Node Reported").await;
+
+        let device = registry.device("device-01").await.unwrap();
+        assert_eq!(device.name, "Node Reported");
+        assert_eq!(device.label.as_deref(), Some("Pos Pantau"));
+    }
+
+    #[tokio::test]
+    async fn remove_device_broadcasts_event() {
+        let registry = Registry::new();
+        registry.register(config("device-01")).await;
+        let mut rx = registry.subscribe();
+
+        assert!(registry.remove("device-01").await);
+        assert!(registry.snapshot().await.is_empty());
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::Removed { .. }
+        ));
+        assert!(!registry.remove("device-01").await);
+    }
+
     #[test]
     fn rejects_invalid_coordinates() {
         assert!(valid_position(-6.2, 106.8));
         assert!(!valid_position(0.0, 0.0));
         assert!(!valid_position(91.0, 106.8));
         assert!(!valid_position(f64::NAN, 106.8));
+    }
+
+    #[test]
+    fn normalizes_imei_values() {
+        assert_eq!(
+            normalize_imei("35 123456 789012 3"),
+            Some("351234567890123".to_string())
+        );
+        assert_eq!(
+            normalize_imei("35-123456-789012-3"),
+            Some("351234567890123".to_string())
+        );
+        assert_eq!(
+            normalize_imei("3512345678901234"),
+            Some("3512345678901234".to_string())
+        );
+        assert_eq!(normalize_imei("35123456789012"), None);
+        assert_eq!(normalize_imei("!a1b2c3d4"), None);
+    }
+
+    #[tokio::test]
+    async fn ingest_fills_serial_for_new_device() {
+        let registry = Registry::new();
+        let mut event = event("imei-01", -6.2, 106.8, EventKind::Heartbeat);
+        event.serial = Some("351234567890123".to_string());
+
+        let device = registry.apply(event).await;
+        assert_eq!(device.serial.as_deref(), Some("351234567890123"));
+    }
+
+    #[test]
+    fn validates_device_ids() {
+        assert!(valid_device_id("!a1b2c3d4"));
+        assert!(valid_device_id("truck-01"));
+        assert!(valid_device_id("gateway.jakarta:1"));
+        assert!(!valid_device_id(""));
+        assert!(!valid_device_id("ada spasi"));
+        assert!(!valid_device_id("id/with/slash"));
     }
 }

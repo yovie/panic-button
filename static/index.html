@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f9fc">
   <title>Panic Button — Live Tracking</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="/style.css">
@@ -17,6 +18,7 @@
       </div>
     </div>
     <div class="topbar-actions">
+      <button id="manage-btn" class="btn" type="button">Kelola Device</button>
       <button id="sound-btn" class="btn ghost" type="button">Suara: OFF</button>
       <div id="conn" class="conn offline">
         <span class="conn-dot"></span>
@@ -51,6 +53,81 @@
       </footer>
     </aside>
   </main>
+
+  <div id="manage-overlay" class="overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="manage-title">
+      <header class="modal-head">
+        <div>
+          <h2 id="manage-title">Kelola Device</h2>
+          <p>Registrasi, labeling, tipe, protokol, dan informasi perangkat</p>
+        </div>
+        <button id="manage-close" class="btn ghost" type="button">Tutup</button>
+      </header>
+      <div class="modal-body">
+        <section class="manage-list">
+          <div class="manage-list-head">
+            <input id="manage-search" type="search" placeholder="Cari ID, label, IMEI, tag..." autocomplete="off">
+            <button id="manage-new" class="btn" type="button">+ Baru</button>
+          </div>
+          <ul id="manage-devices" class="manage-devices"></ul>
+        </section>
+        <form id="device-form" class="device-form" novalidate>
+          <div class="form-grid">
+            <label>Device ID / Node ID
+              <input id="field-id" maxlength="64" placeholder="!a1b2c3d4" autocomplete="off">
+              <small id="field-id-hint" class="field-hint"></small>
+            </label>
+            <label>Label
+              <input id="field-label" maxlength="80" placeholder="Tim Alpha" autocomplete="off">
+            </label>
+            <label>Tipe
+              <select id="field-type">
+                <option value="panic_button">Panic Button</option>
+                <option value="tracker">Tracker</option>
+                <option value="gateway">Gateway</option>
+                <option value="sensor">Sensor</option>
+                <option value="other">Lainnya</option>
+              </select>
+            </label>
+            <label>Protokol
+              <select id="field-protocol">
+                <option value="meshtastic">Meshtastic (MQTT)</option>
+                <option value="http">HTTP</option>
+                <option value="simulator">Simulator</option>
+                <option value="teltonika">Teltonika TCP</option>
+                <option value="other">Lainnya</option>
+              </select>
+            </label>
+            <label>Serial / IMEI
+              <input id="field-serial" maxlength="64" autocomplete="off" placeholder="357xxxx atau SN-001">
+            </label>
+            <label>Pemilik / Unit
+              <input id="field-owner" maxlength="80" autocomplete="off">
+            </label>
+            <label class="full">Tag (pisahkan dengan koma)
+              <input id="field-tags" placeholder="regu-1, malam" autocomplete="off">
+            </label>
+            <label>Latitude
+              <input id="field-lat" type="number" step="any" min="-90" max="90" placeholder="opsional">
+            </label>
+            <label>Longitude
+              <input id="field-lon" type="number" step="any" min="-180" max="180" placeholder="opsional">
+            </label>
+            <label class="full">Catatan
+              <textarea id="field-notes" rows="3" placeholder="Informasi tambahan tentang device ini"></textarea>
+            </label>
+          </div>
+          <div id="form-error" class="form-error hidden"></div>
+          <div class="form-actions">
+            <button type="submit" class="btn primary" id="form-submit">Simpan Device</button>
+            <button type="button" class="btn danger hidden" id="form-delete">Hapus</button>
+            <button type="button" class="btn ghost" id="form-reset">Reset</button>
+            <span id="form-mode" class="form-mode">Tambah device baru</span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/app.js"></script>

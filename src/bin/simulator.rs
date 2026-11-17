@@ -419,6 +419,7 @@ async fn send_ingest(context: &Context<'_>, device: &SimDevice, event: &str) {
         "speed_kmh": device.speed_kmh,
         "heading": device.heading,
         "battery": device.battery.round(),
+        "protocol": "simulator",
         "event": event,
     });
 

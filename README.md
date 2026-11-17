@@ -9,6 +9,11 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
 - Live tracking posisi device di peta (WebSocket, tanpa refresh).
 - Alert panic realtime: marker merah berkedip, banner, auto-pan ke lokasi, dan suara.
 - Daftar device dengan status, kecepatan, baterai, dan waktu terakhir terlihat.
+- Menu **Kelola Device**: registrasi device, label, tipe, protokol, serial/IMEI, pemilik,
+  tag, catatan, dan posisi awal opsional. Konfigurasi tersimpan di JSON dan bertahan
+  setelah restart.
+- **IMEI sebagai Device ID** untuk protokol non-Meshtastic: Device ID boleh dikosongkan,
+  IMEI 15–16 digit dipakai sebagai ID. Serial/IMEI unik dan ikut tercari di modal.
 - Ingest Meshtastic via MQTT (nodeinfo, position, telemetry, detection_sensor, text keyword).
 - Ingest HTTP generik untuk perangkat lain/simulator.
 - Simulator dua mode (HTTP dan Meshtastic MQTT) untuk demo tanpa hardware.
@@ -44,8 +49,9 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
 | `server` | Rust 2024, Axum 0.8, tokio | HTTP API, WebSocket, serve UI statis, subscriber MQTT |
 | `mosquitto` | Eclipse Mosquitto 2 | Broker MQTT anonim, menerima publish dari gateway/simulator |
 | `simulator` | Rust (binary yang sama) | Device palsu: bergerak di rute, memicu panic/resolve |
-| Browser | Leaflet 1.9, OpenStreetMap, vanilla JS | Peta live, marker, alert panic, suara, auto-reconnect |
+| Browser | Leaflet 1.9, OpenStreetMap, vanilla JS | Peta live, marker, alert panic, suara, auto-reconnect, modal Kelola Device |
 | Gateway Meshtastic | ESP32 (T-Beam, Heltec, dll) | Menjembatani trafik LoRa mesh ke MQTT JSON |
+| Device store | JSON (`data/devices.json`) | Konfigurasi device yang diregistrasi manual (label, tipe, protokol, metadata) |
 
 ### Alur Data
 
@@ -53,9 +59,10 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
 1. Gateway Meshtastic publish JSON ke mosquitto: msh/<region>/2/json/<channel>/<userid>
 2. server subscribe wildcard, mem-parse pesan menjadi event ternormalisasi
 3. HTTP ingest (simulator/device lain) masuk ke registry yang sama
-4. Registry menyimpan state terakhir per device di memori
-5. Setiap perubahan di-broadcast ke semua browser lewat WebSocket
-6. UI memperbarui marker, sidebar, dan alert panic tanpa refresh
+4. Device yang diregistrasi lewat UI dimuat dari data/devices.json saat startup
+5. Registry menyimpan state terakhir per device di memori
+6. Setiap perubahan di-broadcast ke semua browser lewat WebSocket
+7. UI memperbarui marker, sidebar, dan alert panic tanpa refresh
 ```
 
 Semua sumber data (MQTT, HTTP, dan nanti TCP Teltonika) bermuara pada satu
@@ -83,19 +90,31 @@ event panic_clear (HTTP) ───────┘                           broa
 
 ### State Device
 
-State disimpan in-memory di `Registry` (`RwLock<HashMap<String, Device>>`) dengan
-metadata tambahan untuk nama dan pending panic.
+State live disimpan in-memory di `Registry` (`RwLock<HashMap<String, Device>>`)
+dengan metadata tambahan untuk nama dan pending panic. Konfigurasi yang dikelola
+lewat UI disimpan terpisah di `DeviceStore` (`data/devices.json`) dan dimuat saat
+startup, sehingga label/tipe/protokol tidak hilang saat restart.
 
 | Field | Tipe | Keterangan |
 |---|---|---|
-| `id` | string | Node ID Meshtastic (`!a1b2c3d4`) atau ID bebas untuk HTTP |
+| `id` | string | Node ID Meshtastic (`!a1b2c3d4`), IMEI, atau ID bebas (huruf, angka, `! - _ . :`, maks 64) |
 | `name` | string | Nama dari `nodeinfo`, fallback ke ID |
-| `lat`, `lon` | float | Posisi terakhir (derajat) |
+| `label` | string/null | Label yang diberikan operator lewat Kelola Device; diprioritaskan di UI |
+| `device_type` | enum | `panic_button` / `tracker` / `gateway` / `sensor` / `other` |
+| `protocol` | enum | `meshtastic` / `http` / `simulator` / `teltonika` / `other` |
+| `serial` | string/null | Serial/IMEI unik; untuk protokol non-Meshtastic dapat menjadi `id` |
+| `owner`, `notes` | string/null | Pemilik/unit dan catatan bebas |
+| `tags` | string[] | Tag untuk pengelompokan/pencarian (maks 32 karakter per tag) |
+| `lat`, `lon` | float/null | Posisi terakhir (derajat); `null` jika device belum pernah mengirim posisi |
 | `speed_kmh`, `heading` | float/null | Kecepatan dan arah |
 | `battery` | float/null | Baterai dari `telemetry` |
-| `last_seen` | timestamp | Waktu update terakhir (UTC) |
+| `last_seen` | timestamp/null | Waktu update terakhir (UTC); `null` untuk device yang baru diregistrasi |
 | `status` | `normal` / `panic` | Status panic saat ini |
 | `panic_since` | timestamp/null | Waktu panic dimulai |
+
+`label` sengaja terpisah dari `name`: `name` berasal dari perangkat (`nodeinfo`),
+sedangkan `label` adalah nama operasional yang bisa diubah kapan saja tanpa
+menunggu device mengirim data.
 
 ### Protokol WebSocket
 
@@ -103,15 +122,16 @@ Client terhubung ke `/ws`. Saat connect server mengirim `snapshot`, lalu stream
 perubahan. Semua pesan memakai field pembeda `type`.
 
 ```json
-{ "type": "snapshot", "devices": [ { "id": "!0000c001", "name": "Sim Alpha", "lat": -6.1934, "lon": 106.8231, "speed_kmh": 40.6, "battery": 90.0, "last_seen": "2026-11-17T11:51:48.068Z", "status": "normal", "panic_since": null } ] }
+{ "type": "snapshot", "devices": [ { "id": "!0000c001", "name": "Sim Alpha", "label": "Tim Alpha", "device_type": "panic_button", "protocol": "meshtastic", "serial": "SN-1", "owner": "Satgas", "tags": ["regu-1"], "notes": null, "lat": -6.1934, "lon": 106.8231, "speed_kmh": 40.6, "battery": 90.0, "last_seen": "2026-11-17T11:51:48.068Z", "status": "normal", "panic_since": null } ] }
 ```
 
 | `type` | Payload | Kapan dikirim |
 |---|---|---|
 | `snapshot` | `devices[]` | Saat client connect / client tertinggal |
-| `update` | `device` | Update posisi/telemetry/status normal |
+| `update` | `device` | Update posisi/telemetry/metadata/status normal |
 | `panic` | `device` | Transisi normal -> panic |
 | `panic_cleared` | `device` | Panic diselesaikan |
+| `removed` | `id` | Device dihapus lewat API/UI |
 
 Fan-out memakai `tokio::sync::broadcast` (kapasitas 1024). Jika satu client
 terlambat, server mengirim snapshot baru agar state tetap konsisten. Beberapa tab
@@ -140,19 +160,25 @@ Topik: `msh/<region>/2/json/<channel>/<userid>` (subscribe default
 | `simulator` | sama dengan server | - | - | dinonaktifkan |
 
 `server` dan `mosquitto` selalu berjalan; `simulator` memakai profile `sim` agar
-tidak ikut di produksi. Resource limit per service dijelaskan di bagian
+tidak ikut di produksi. Konfigurasi device disimpan pada volume Docker
+`device-data` (`/app/data/devices.json`), sehingga `docker compose down` tanpa `-v`
+tidak menghapus data. Resource limit per service dijelaskan di bagian
 [Resource Limit](#resource-limit).
 
 ### Keputusan Desain dan Batasan
 
-- **State in-memory** — cepat dan sederhana; restart server menghapus posisi/panic.
-  Riwayat perjalanan dan audit belum disimpan (kandidat: SQLite/PostGIS).
+- **State live in-memory** — cepat dan sederhana; restart server menghapus posisi,
+  baterai, dan panic. Konfigurasi device yang diregistrasi lewat UI tetap tersimpan
+  di JSON. Riwayat perjalanan dan audit belum disimpan (kandidat: SQLite/PostGIS).
+- **Config JSON + atomic write** — `DeviceStore` menulis ke file sementara lalu
+  `rename`, sehingga file tidak korup jika proses berhenti di tengah penulisan.
 - **Protokol-agnostic** — ingest MQTT dan HTTP memakai model event yang sama;
   listener TCP Teltonika/MQTT vendor lain bisa ditambahkan tanpa mengubah UI.
-- **Publik tanpa auth** — dashboard, API panic/resolve, dan broker terbuka. Hanya
-  untuk demo/operasi internal; lihat [Catatan Keamanan](#catatan-keamanan).
-- **Tanpa database** — device baru muncul saat pesan pertama diterima; nama dari
-  `nodeinfo` disimpan selama proses berjalan.
+- **Publik tanpa auth** — dashboard, API panic/resolve/CRUD, dan broker terbuka.
+  Hanya untuk demo/operasi internal; lihat [Catatan Keamanan](#catatan-keamanan).
+- **Device otomatis vs terkelola** — device tetap muncul otomatis saat pesan pertama
+  diterima; registrasi manual dipakai untuk memberi label/metadata sebelum device
+  online atau untuk perangkat non-Meshtastic.
 
 ## Quick Start (Docker Compose)
 
@@ -221,6 +247,9 @@ make check                         # cargo fmt + clippy + test
      `PANIC_KEYWORD`).
 5. Posisi diambil dari paket `position`, nama device dari `nodeinfo`, baterai dari
    `telemetry`.
+6. Meshtastic **tidak memiliki IMEI**. Untuk node Meshtastic, wajib memakai Node ID
+   `!xxxxxxxx` dari aplikasi Meshtastic (Node Info) sebagai Device ID; kolom Serial/IMEI
+   boleh diisi nomor seri perangkat, bukan IMEI.
 
 Verifikasi pesan masuk ke broker:
 
@@ -237,7 +266,10 @@ sesuai region/channel yang dipakai.
 | Method | Path | Keterangan |
 |---|---|---|
 | POST | `/api/ingest` | Kirim event device (JSON) |
-| GET | `/api/devices` | Snapshot semua device |
+| GET | `/api/devices` | Snapshot semua device (live + terdaftar) |
+| POST | `/api/devices` | Registrasi device baru; `id` opsional untuk non-Meshtastic jika IMEI diisi (`409` jika ID/IMEI sudah ada) |
+| PATCH | `/api/devices/{id}` | Update label/tipe/protokol/metadata/posisi awal |
+| DELETE | `/api/devices/{id}` | Hapus device dari registry dan penyimpanan |
 | POST | `/api/devices/{id}/panic` | Tandai device panic (lokasi terakhir) |
 | POST | `/api/devices/{id}/resolve` | Selesaikan panic |
 | GET | `/ws` | WebSocket realtime |
@@ -256,11 +288,81 @@ curl -X POST http://localhost:8080/api/ingest \
     "speed_kmh": 12.5,
     "heading": 90,
     "battery": 88,
+    "device_type": "panic_button",
+    "protocol": "http",
     "event": "heartbeat"
   }'
 ```
 
-`event` menerima `heartbeat`, `panic`, atau `panic_clear`.
+`event` menerima `heartbeat`, `panic`, atau `panic_clear`. `device_type`/`protocol`
+opsional dan hanya dipakai saat device pertama kali dibuat; `protocol` default
+`http` untuk ingest HTTP. `serial` opsional dan disimpan bila device belum punya
+serial. Jika `device_id` kosong tetapi `serial` berisi IMEI 15–16 digit, server
+memakai IMEI tersebut sebagai ID.
+
+Registrasi device (posisi opsional, `lat` dan `lon` harus berpasangan):
+
+Aturan identitas:
+- **Meshtastic** — `id` wajib berupa Node ID `!xxxxxxxx`.
+- **HTTP/Teltonika/simulator/lainnya** — `id` boleh dikosongkan jika `serial` berisi
+  IMEI 15–16 digit; server memakai IMEI sebagai `id` (spasi dan tanda hubung
+  dinormalisasi).
+- Jika `id` diisi IMEI pada protokol non-Meshtastic dan `serial` kosong, `serial`
+  diisi otomatis.
+- Serial/IMEI harus unik; duplikat ditolak dengan `409`.
+
+```bash
+curl -X POST http://localhost:8080/api/devices \
+  -H 'content-type: application/json' \
+  -d '{
+    "id": "!a1b2c3d4",
+    "label": "Tim Alpha",
+    "device_type": "panic_button",
+    "protocol": "meshtastic",
+    "serial": "SN-001",
+    "owner": "Satgas",
+    "tags": ["regu-1", "malam"],
+    "notes": "Unit pengamanan lapangan",
+    "lat": -6.2,
+    "lon": 106.8
+  }'
+```
+
+Contoh tracker seluler tanpa Device ID (IMEI menjadi ID):
+
+```bash
+curl -X POST http://localhost:8080/api/devices \
+  -H 'content-type: application/json' \
+  -d '{
+    "label": "Truk Logistik 01",
+    "device_type": "tracker",
+    "protocol": "teltonika",
+    "serial": "357 123456 789012",
+    "owner": "Logistik"
+  }'
+```
+
+Respons akan memiliki `id` dan `serial` bernilai `357123456789012`. Device harus
+mengirim IMEI tersebut sebagai `device_id` pada ingest (atau `device_id` kosong +
+`serial` IMEI).
+
+Update metadata (kirim string kosong untuk menghapus nilai opsional; `tags`
+menggantikan seluruh daftar tag):
+
+```bash
+curl -X PATCH http://localhost:8080/api/devices/!a1b2c3d4 \
+  -H 'content-type: application/json' \
+  -d '{"label": "Tim Alpha 2", "owner": "", "tags": ["regu-2"]}'
+```
+
+Hapus device:
+
+```bash
+curl -X DELETE http://localhost:8080/api/devices/!a1b2c3d4
+```
+
+Operasi tulis menyimpan perubahan ke `DEVICES_FILE` terlebih dahulu, lalu
+memperbarui registry dan menyiarkan `update`/`removed` via WebSocket.
 
 ## Konfigurasi
 
@@ -273,6 +375,7 @@ curl -X POST http://localhost:8080/api/ingest \
 | `MQTT_URL` | `mqtt://mosquitto:1883` | URL broker |
 | `MQTT_TOPIC` | `msh/+/2/json/+/#` | Topik langganan |
 | `PANIC_KEYWORD` | `PANIC,SOS` | Keyword teks pemicu panic |
+| `DEVICES_FILE` | `data/devices.json` | Lokasi penyimpanan konfigurasi device |
 
 Salin `.env.example` menjadi `.env` jika ingin mengubah nilai default.
 
@@ -323,6 +426,7 @@ cargo fmt --check
 ├── mosquitto/mosquitto.conf
 ├── src/
 │   ├── lib.rs            # Device registry, state panic, broadcast
+│   ├── store.rs          # Penyimpanan konfigurasi device (JSON)
 │   ├── mqtt.rs           # Subscriber Meshtastic JSON
 │   └── bin/
 │       ├── server.rs     # HTTP API, WebSocket, static files
@@ -349,5 +453,9 @@ di internet terbuka. Untuk produksi, tambahkan autentikasi, TLS, dan batasi topi
   sebagai panic jika field state tidak ada.
 - **Suara tidak berbunyi**: browser memblokir audio sebelum interaksi pengguna; klik
   tombol `Suara: OFF` sekali untuk mengaktifkan.
+- **Tracker ditolak "Device ID wajib diisi"**: untuk perangkat non-Meshtastic, isi
+  Serial/IMEI 15–16 digit dan kosongkan Device ID, atau isi Device ID manual.
+- **`409 serial/IMEI already registered`**: IMEI sudah dipakai device lain. Cari IMEI
+  tersebut di kolom pencarian modal Kelola Device (pencarian mencakup IMEI).
 - **Simulator di Docker tidak merespons tombol**: jalankan dengan `run --rm -it` agar
   stdin terhubung, lalu ketik `p`/`r`/`q` diikuti Enter.

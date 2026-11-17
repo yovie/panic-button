@@ -5,17 +5,25 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
-use panic_button::{Device, IngestEvent, Registry, ServerMessage, mqtt, valid_position};
+use panic_button::{
+    Device, DeviceConfig, DeviceType, IngestEvent, Protocol, Registry, ServerMessage, mqtt,
+    normalize_imei, store::DeviceStore, valid_device_id, valid_position,
+};
+use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{env, net::SocketAddr, sync::Arc};
-use tokio::sync::broadcast::error::RecvError;
+use std::{collections::HashSet, env, net::SocketAddr, sync::Arc};
+use tokio::sync::{Mutex, broadcast::error::RecvError};
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-type AppState = Arc<Registry>;
+#[derive(Clone)]
+struct AppState {
+    registry: Arc<Registry>,
+    store: Arc<Mutex<DeviceStore>>,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -26,6 +34,17 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let registry = Registry::shared();
+
+    let devices_file = env_or("DEVICES_FILE", "data/devices.json");
+    let store = DeviceStore::load(&devices_file).await;
+    for config in store.configs() {
+        registry.register(config).await;
+    }
+    info!(
+        path = %devices_file,
+        managed_devices = store.len(),
+        "device store loaded"
+    );
 
     if env_flag("MQTT_ENABLED", false) {
         let config = mqtt::MqttConfig {
@@ -47,19 +66,28 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    let state = AppState {
+        registry: registry.clone(),
+        store: Arc::new(Mutex::new(store)),
+    };
+
     let static_dir = env_or("STATIC_DIR", "static");
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/ingest", post(ingest))
-        .route("/api/devices", get(list_devices))
+        .route("/api/devices", get(list_devices).post(create_device))
+        .route(
+            "/api/devices/{id}",
+            patch(update_device).delete(delete_device),
+        )
         .route("/api/devices/{id}/panic", post(trigger_panic))
         .route("/api/devices/{id}/resolve", post(resolve_panic))
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
-        .with_state(registry);
+        .with_state(state);
 
     let port: u16 = env_or("PORT", "8080").parse()?;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -69,19 +97,35 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn health(State(registry): State<AppState>) -> Json<Value> {
+async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "status": "ok",
-        "devices": registry.snapshot().await.len(),
+        "devices": state.registry.snapshot().await.len(),
     }))
 }
 
 async fn ingest(
-    State(registry): State<AppState>,
-    Json(event): Json<IngestEvent>,
+    State(state): State<AppState>,
+    Json(mut event): Json<IngestEvent>,
 ) -> Result<Json<Device>, (StatusCode, String)> {
-    if event.device_id.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "device_id is required".to_string()));
+    let mut id = event.device_id.trim().to_string();
+    let serial = clean_serial(event.serial.take());
+    if id.is_empty()
+        && let Some(imei) = serial.as_deref().and_then(normalize_imei)
+    {
+        id = imei;
+    }
+    if id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "device_id wajib diisi, atau sediakan serial/IMEI 15-16 digit".to_string(),
+        ));
+    }
+    if !valid_device_id(&id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid device_id: use letters, digits, ! - _ . : (max 64)".to_string(),
+        ));
     }
     if !valid_position(event.lat, event.lon) {
         return Err((
@@ -90,18 +134,181 @@ async fn ingest(
         ));
     }
 
-    Ok(Json(registry.apply(event).await))
+    event.device_id = id;
+    if event.protocol.is_none() {
+        event.protocol = Some(Protocol::Http);
+    }
+    event.serial = match serial {
+        Some(serial) => Some(serial),
+        None if event.protocol != Some(Protocol::Meshtastic) => normalize_imei(&event.device_id),
+        None => None,
+    };
+
+    Ok(Json(state.registry.apply(event).await))
 }
 
-async fn list_devices(State(registry): State<AppState>) -> Json<Vec<Device>> {
-    Json(registry.snapshot().await)
+async fn list_devices(State(state): State<AppState>) -> Json<Vec<Device>> {
+    Json(state.registry.snapshot().await)
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateDeviceRequest {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    device_type: Option<DeviceType>,
+    #[serde(default)]
+    protocol: Option<Protocol>,
+    #[serde(default)]
+    serial: Option<String>,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    lat: Option<f64>,
+    #[serde(default)]
+    lon: Option<f64>,
+}
+
+async fn create_device(
+    State(state): State<AppState>,
+    Json(request): Json<CreateDeviceRequest>,
+) -> Result<(StatusCode, Json<Device>), (StatusCode, String)> {
+    let protocol = request.protocol.unwrap_or_default();
+    let (id, serial) = resolve_identity(protocol, request.id, request.serial)
+        .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+
+    if state.registry.device(&id).await.is_some() {
+        return Err((StatusCode::CONFLICT, "device already exists".to_string()));
+    }
+    if let Some(serial) = serial.as_deref()
+        && serial_in_use(&state, serial, None).await
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "serial/IMEI already registered".to_string(),
+        ));
+    }
+
+    let (lat, lon) = position_pair(request.lat, request.lon)?;
+    let config = DeviceConfig {
+        id,
+        label: clean_optional(request.label),
+        device_type: request.device_type.unwrap_or_default(),
+        protocol,
+        serial,
+        owner: clean_optional(request.owner),
+        tags: clean_tags(request.tags),
+        notes: clean_optional(request.notes),
+        lat,
+        lon,
+    };
+
+    persist_upsert(&state, config.clone()).await?;
+    let device = state.registry.register(config).await;
+    Ok((StatusCode::CREATED, Json(device)))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct UpdateDeviceRequest {
+    label: Option<String>,
+    device_type: Option<DeviceType>,
+    protocol: Option<Protocol>,
+    serial: Option<String>,
+    owner: Option<String>,
+    tags: Option<Vec<String>>,
+    notes: Option<String>,
+    lat: Option<f64>,
+    lon: Option<f64>,
+}
+
+async fn update_device(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateDeviceRequest>,
+) -> Result<Json<Device>, (StatusCode, String)> {
+    let Some(existing) = state.registry.device(&id).await else {
+        return Err((StatusCode::NOT_FOUND, "device not found".to_string()));
+    };
+
+    let mut config = DeviceConfig {
+        id: existing.id.clone(),
+        label: existing.label.clone(),
+        device_type: existing.device_type,
+        protocol: existing.protocol,
+        serial: existing.serial.clone(),
+        owner: existing.owner.clone(),
+        tags: existing.tags.clone(),
+        notes: existing.notes.clone(),
+        lat: existing.lat,
+        lon: existing.lon,
+    };
+
+    if let Some(device_type) = request.device_type {
+        config.device_type = device_type;
+    }
+    if let Some(protocol) = request.protocol {
+        config.protocol = protocol;
+    }
+    if let Some(label) = request.label {
+        config.label = clean_optional(Some(label));
+    }
+    if let Some(serial) = request.serial {
+        config.serial = clean_serial(Some(serial));
+    }
+    if let Some(owner) = request.owner {
+        config.owner = clean_optional(Some(owner));
+    }
+    if let Some(notes) = request.notes {
+        config.notes = clean_optional(Some(notes));
+    }
+    if let Some(tags) = request.tags {
+        config.tags = clean_tags(tags);
+    }
+    if request.lat.is_some() || request.lon.is_some() {
+        let (lat, lon) = position_pair(request.lat, request.lon)?;
+        config.lat = lat;
+        config.lon = lon;
+    }
+
+    if let Some(serial) = config.serial.as_deref()
+        && serial_in_use(&state, serial, Some(&id)).await
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "serial/IMEI already registered".to_string(),
+        ));
+    }
+
+    persist_upsert(&state, config.clone()).await?;
+    let device = state.registry.register(config).await;
+    Ok(Json(device))
+}
+
+async fn delete_device(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if state.registry.device(&id).await.is_none() {
+        return Err((StatusCode::NOT_FOUND, "device not found".to_string()));
+    }
+
+    persist_remove(&state, &id).await?;
+    state.registry.remove(&id).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn trigger_panic(
-    State(registry): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Device>, StatusCode> {
-    registry
+    state
+        .registry
         .set_panic(&id, true)
         .await
         .map(Json)
@@ -109,24 +316,146 @@ async fn trigger_panic(
 }
 
 async fn resolve_panic(
-    State(registry): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Device>, StatusCode> {
-    registry
+    state
+        .registry
         .set_panic(&id, false)
         .await
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(registry): State<AppState>,
-) -> impl axum::response::IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, registry))
+async fn persist_upsert(
+    state: &AppState,
+    config: DeviceConfig,
+) -> Result<(), (StatusCode, String)> {
+    let mut store = state.store.lock().await;
+    store.upsert(config);
+    store.save().await.map_err(|error| {
+        warn!(%error, "failed to persist device store");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to persist device store".to_string(),
+        )
+    })
 }
 
-async fn handle_socket(mut socket: WebSocket, registry: AppState) {
+async fn persist_remove(state: &AppState, id: &str) -> Result<(), (StatusCode, String)> {
+    let mut store = state.store.lock().await;
+    store.remove(id);
+    store.save().await.map_err(|error| {
+        warn!(%error, "failed to persist device store");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to persist device store".to_string(),
+        )
+    })
+}
+
+fn clean_serial(serial: Option<String>) -> Option<String> {
+    let serial = clean_optional(serial)?;
+    normalize_imei(&serial).or(Some(serial))
+}
+
+async fn serial_in_use(state: &AppState, serial: &str, except_id: Option<&str>) -> bool {
+    state.registry.snapshot().await.iter().any(|device| {
+        Some(device.id.as_str()) != except_id
+            && device
+                .serial
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case(serial))
+    })
+}
+
+fn resolve_identity(
+    protocol: Protocol,
+    raw_id: Option<String>,
+    raw_serial: Option<String>,
+) -> Result<(String, Option<String>), String> {
+    let id = raw_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let serial = clean_serial(raw_serial);
+
+    match id {
+        Some(id) => {
+            if !valid_device_id(&id) {
+                return Err(
+                    "invalid device id: use letters, digits, ! - _ . : (max 64)".to_string()
+                );
+            }
+
+            let serial = match serial {
+                Some(serial) => Some(serial),
+                None if protocol != Protocol::Meshtastic => normalize_imei(&id),
+                None => None,
+            };
+            Ok((id, serial))
+        }
+        None => {
+            if protocol == Protocol::Meshtastic {
+                return Err(
+                    "Device ID (node ID Meshtastic) wajib diisi, contoh !a1b2c3d4".to_string(),
+                );
+            }
+
+            let Some(serial) = serial else {
+                return Err(
+                    "Device ID wajib diisi, atau isi Serial/IMEI 15-16 digit untuk memakai IMEI sebagai ID"
+                        .to_string(),
+                );
+            };
+            let Some(imei) = normalize_imei(&serial) else {
+                return Err("Serial/IMEI harus 15-16 digit bila Device ID dikosongkan".to_string());
+            };
+
+            Ok((imei.clone(), Some(imei)))
+        }
+    }
+}
+
+fn clean_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+fn clean_tags(tags: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut cleaned = Vec::new();
+    for tag in tags {
+        let tag = tag.trim().to_string();
+        if !tag.is_empty() && tag.len() <= 32 && seen.insert(tag.clone()) {
+            cleaned.push(tag);
+        }
+    }
+    cleaned
+}
+
+fn position_pair(
+    lat: Option<f64>,
+    lon: Option<f64>,
+) -> Result<(Option<f64>, Option<f64>), (StatusCode, String)> {
+    match (lat, lon) {
+        (Some(lat), Some(lon)) if valid_position(lat, lon) => Ok((Some(lat), Some(lon))),
+        (None, None) => Ok((None, None)),
+        _ => Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "lat and lon must both be provided and valid".to_string(),
+        )),
+    }
+}
+
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, state.registry))
+}
+
+async fn handle_socket(mut socket: WebSocket, registry: Arc<Registry>) {
     let snapshot = ServerMessage::Snapshot {
         devices: registry.snapshot().await,
     };
@@ -175,4 +504,71 @@ fn env_flag(key: &str, default: bool) -> bool {
     env::var(key)
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uses_imei_as_id_for_non_meshtastic() {
+        let (id, serial) = resolve_identity(
+            Protocol::Teltonika,
+            None,
+            Some("35 123456 789012 3".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(id, "351234567890123");
+        assert_eq!(serial.as_deref(), Some("351234567890123"));
+    }
+
+    #[test]
+    fn accepts_sixteen_digit_imei() {
+        let (id, serial) =
+            resolve_identity(Protocol::Http, None, Some("3512345678901234".to_string())).unwrap();
+
+        assert_eq!(id, "3512345678901234");
+        assert_eq!(serial.as_deref(), Some("3512345678901234"));
+    }
+
+    #[test]
+    fn requires_device_id_for_meshtastic() {
+        let error = resolve_identity(Protocol::Meshtastic, None, Some("352222333444555".into()))
+            .unwrap_err();
+        assert!(error.contains("node ID Meshtastic"));
+    }
+
+    #[test]
+    fn requires_valid_imei_when_id_is_empty() {
+        assert!(resolve_identity(Protocol::Teltonika, None, None).is_err());
+        assert!(resolve_identity(Protocol::Teltonika, None, Some("SN-1".into())).is_err());
+    }
+
+    #[test]
+    fn keeps_explicit_id_and_serial_for_non_meshtastic() {
+        let (id, serial) = resolve_identity(
+            Protocol::Http,
+            Some("truck-01".into()),
+            Some("SN-123".into()),
+        )
+        .unwrap();
+
+        assert_eq!(id, "truck-01");
+        assert_eq!(serial.as_deref(), Some("SN-123"));
+    }
+
+    #[test]
+    fn mirrors_imei_id_into_serial() {
+        let (id, serial) =
+            resolve_identity(Protocol::Teltonika, Some("351234567890123".into()), None).unwrap();
+
+        assert_eq!(id, "351234567890123");
+        assert_eq!(serial.as_deref(), Some("351234567890123"));
+    }
+
+    #[test]
+    fn rejects_invalid_device_id() {
+        assert!(resolve_identity(Protocol::Http, Some("bad id".into()), None).is_err());
+    }
 }

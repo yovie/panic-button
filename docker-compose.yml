@@ -15,6 +15,9 @@ services:
       MQTT_URL: "${MQTT_URL:-mqtt://mosquitto:1883}"
       MQTT_TOPIC: "${MQTT_TOPIC:-msh/+/2/json/+/#}"
       PANIC_KEYWORD: "${PANIC_KEYWORD:-PANIC,SOS}"
+      DEVICES_FILE: "/app/data/devices.json"
+    volumes:
+      - device-data:/app/data
     depends_on:
       mosquitto:
         condition: service_healthy
@@ -114,3 +117,4 @@ services:
 
 volumes:
   mosquitto-data:
+  device-data:

@@ -1,6 +1,33 @@
 (() => {
   'use strict';
 
+  const TYPE_LABELS = {
+    panic_button: 'Panic Button',
+    tracker: 'Tracker',
+    gateway: 'Gateway',
+    sensor: 'Sensor',
+    other: 'Lainnya',
+  };
+
+  const PROTOCOL_LABELS = {
+    meshtastic: 'Meshtastic',
+    http: 'HTTP',
+    simulator: 'Simulator',
+    teltonika: 'Teltonika',
+    other: 'Lainnya',
+  };
+
+  const METADATA_KEYS = [
+    'name',
+    'label',
+    'device_type',
+    'protocol',
+    'serial',
+    'owner',
+    'tags',
+    'notes',
+  ];
+
   const map = L.map('map').setView([-6.1944, 106.8229], 12);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
@@ -22,6 +49,31 @@
     soundBtn: document.getElementById('sound-btn'),
     sidebar: document.getElementById('sidebar'),
     sidebarToggle: document.getElementById('sidebar-toggle'),
+    manageBtn: document.getElementById('manage-btn'),
+    manageOverlay: document.getElementById('manage-overlay'),
+    manageClose: document.getElementById('manage-close'),
+    manageSearch: document.getElementById('manage-search'),
+    manageNew: document.getElementById('manage-new'),
+    manageDevices: document.getElementById('manage-devices'),
+    deviceForm: document.getElementById('device-form'),
+    formError: document.getElementById('form-error'),
+    formSubmit: document.getElementById('form-submit'),
+    formDelete: document.getElementById('form-delete'),
+    formReset: document.getElementById('form-reset'),
+    formMode: document.getElementById('form-mode'),
+    idHint: document.getElementById('field-id-hint'),
+    fields: {
+      id: document.getElementById('field-id'),
+      label: document.getElementById('field-label'),
+      type: document.getElementById('field-type'),
+      protocol: document.getElementById('field-protocol'),
+      serial: document.getElementById('field-serial'),
+      owner: document.getElementById('field-owner'),
+      tags: document.getElementById('field-tags'),
+      lat: document.getElementById('field-lat'),
+      lon: document.getElementById('field-lon'),
+      notes: document.getElementById('field-notes'),
+    },
   };
 
   const devices = new Map();
@@ -37,6 +89,8 @@
     soundEnabled: false,
     audioContext: null,
     alarmTimer: null,
+    editingId: null,
+    manageDevices: [],
   };
 
   function escapeHtml(value) {
@@ -63,6 +117,35 @@
     return `${Math.floor(seconds / 86400)} hari lalu`;
   }
 
+  function displayName(device) {
+    const label = typeof device.label === 'string' ? device.label.trim() : '';
+    if (label) return label;
+    if (device.name) return device.name;
+    return device.id;
+  }
+
+  function isPositioned(device) {
+    return typeof device.lat === 'number' && typeof device.lon === 'number';
+  }
+
+  function typeLabel(device) {
+    return TYPE_LABELS[device.device_type] || device.device_type || 'Lainnya';
+  }
+
+  function protocolLabel(device) {
+    return PROTOCOL_LABELS[device.protocol] || device.protocol || 'Lainnya';
+  }
+
+  function serialKind(device) {
+    return typeof device.serial === 'string' && /^\d{15,16}$/.test(device.serial)
+      ? 'IMEI'
+      : 'Serial';
+  }
+
+  function normalizeSerialInput(value) {
+    return String(value || '').replace(/[\s-]/g, '');
+  }
+
   function hasPanic() {
     return [...devices.values()].some((device) => device.status === 'panic');
   }
@@ -71,32 +154,57 @@
     const panic = device.status === 'panic';
     return L.divIcon({
       className: 'device-marker-wrap',
-      html: `<div class="device-marker${panic ? ' panic' : ''}"><span class="dot"></span><span class="label">${escapeHtml(device.name)}</span></div>`,
+      html: `<div class="device-marker${panic ? ' panic' : ''}"><span class="dot"></span><span class="label">${escapeHtml(displayName(device))}</span></div>`,
       iconSize: [180, 24],
       iconAnchor: [7, 12],
     });
   }
 
+  function removeMarker(id) {
+    const marker = markers.get(id);
+    if (marker) {
+      marker.remove();
+      markers.delete(id);
+    }
+  }
+
+  function syncManageEntry(device) {
+    if (els.manageOverlay.classList.contains('hidden')) return;
+    const index = state.manageDevices.findIndex((item) => item.id === device.id);
+    if (index >= 0) state.manageDevices[index] = device;
+    else state.manageDevices.push(device);
+    renderManageList();
+  }
+
   function upsertDevice(device, options = {}) {
+    const previous = devices.get(device.id);
+    const metadataChanged = !previous || METADATA_KEYS.some(
+      (key) => JSON.stringify(previous[key]) !== JSON.stringify(device[key]),
+    );
+
     devices.set(device.id, device);
 
-    const latlng = [device.lat, device.lon];
-    let marker = markers.get(device.id);
-    if (!marker) {
-      marker = L.marker(latlng, {
-        icon: buildIcon(device),
-        riseOnHover: true,
-      }).addTo(map);
-      marker.on('click', () => focusDevice(device.id));
-      markers.set(device.id, marker);
+    if (isPositioned(device)) {
+      const latlng = [device.lat, device.lon];
+      let marker = markers.get(device.id);
+      if (!marker) {
+        marker = L.marker(latlng, {
+          icon: buildIcon(device),
+          riseOnHover: true,
+        }).addTo(map);
+        marker.on('click', () => focusDevice(device.id));
+        markers.set(device.id, marker);
+      } else {
+        marker.setLatLng(latlng);
+        marker.setIcon(buildIcon(device));
+      }
     } else {
-      marker.setLatLng(latlng);
-      marker.setIcon(buildIcon(device));
+      removeMarker(device.id);
     }
 
     if (options.alarm) {
       state.latestPanicId = device.id;
-      focusDevice(device.id, 15);
+      if (isPositioned(device)) focusDevice(device.id, 15);
       if (state.soundEnabled) {
         beep();
         startAlarm();
@@ -107,6 +215,19 @@
       renderSidebar();
       updateAlert();
     }
+
+    if (metadataChanged) syncManageEntry(device);
+  }
+
+  function removeDevice(id) {
+    removeMarker(id);
+    devices.delete(id);
+    state.manageDevices = state.manageDevices.filter((item) => item.id !== id);
+
+    if (state.editingId === id) resetForm();
+    renderSidebar();
+    updateAlert();
+    if (!els.manageOverlay.classList.contains('hidden')) renderManageList();
   }
 
   function applySnapshot(list) {
@@ -117,11 +238,11 @@
       upsertDevice(device);
     });
 
-    for (const id of [...markers.keys()]) {
+    for (const id of [...devices.keys()]) {
       if (!seen.has(id)) {
-        markers.get(id).remove();
-        markers.delete(id);
+        removeMarker(id);
         devices.delete(id);
+        state.manageDevices = state.manageDevices.filter((item) => item.id !== id);
       }
     }
 
@@ -129,13 +250,17 @@
     renderSidebar();
     updateAlert();
 
+    if (!els.manageOverlay.classList.contains('hidden')) {
+      refreshManageList().catch(() => {});
+    }
+
     if (state.firstSnapshot) {
       state.firstSnapshot = false;
       fitDevices();
       const panicDevice = list.find((device) => device.status === 'panic');
       if (panicDevice) {
         state.latestPanicId = panicDevice.id;
-        focusDevice(panicDevice.id, 14);
+        if (isPositioned(panicDevice)) focusDevice(panicDevice.id, 14);
       }
     }
   }
@@ -143,7 +268,7 @@
   function renderSidebar() {
     const list = [...devices.values()].sort((a, b) => {
       if (a.status !== b.status) return a.status === 'panic' ? -1 : 1;
-      return String(a.name).localeCompare(String(b.name));
+      return displayName(a).localeCompare(displayName(b));
     });
 
     els.deviceCount.textContent = String(list.length);
@@ -151,7 +276,7 @@
 
     if (!list.length) {
       els.deviceList.innerHTML =
-        '<li class="empty">Belum ada device.<br>Jalankan simulator atau arahkan gateway Meshtastic ke broker MQTT.</li>';
+        '<li class="empty">Belum ada device.<br>Registrasi lewat "Kelola Device", jalankan simulator, atau arahkan gateway Meshtastic ke broker MQTT.</li>';
       return;
     }
 
@@ -160,28 +285,42 @@
 
   function renderDeviceItem(device) {
     const panic = device.status === 'panic';
+    const positioned = isPositioned(device);
     const meta = [];
 
     if (panic) {
       meta.push(`<span class="panic-text">PANIC · ${relativeTime(device.panic_since)}</span>`);
-    } else {
+    } else if (device.last_seen) {
       meta.push(`<span>${relativeTime(device.last_seen)}</span>`);
+    } else {
+      meta.push('<span>belum terhubung</span>');
     }
+
+    meta.push(`<span>${escapeHtml(typeLabel(device))}</span>`);
+    meta.push(`<span>${escapeHtml(protocolLabel(device))}</span>`);
+    if (device.serial) {
+      meta.push(`<span>${escapeHtml(serialKind(device))} ${escapeHtml(device.serial)}</span>`);
+    }
+
     if (typeof device.speed_kmh === 'number') {
       meta.push(`<span>${device.speed_kmh.toFixed(1)} km/j</span>`);
     }
     if (typeof device.battery === 'number') {
       meta.push(`<span>baterai ${Math.round(device.battery)}%</span>`);
     }
+    if (!positioned) {
+      meta.push('<span>lokasi belum ada</span>');
+    }
 
     return `<li class="device${panic ? ' panic' : ''}" data-id="${escapeHtml(device.id)}">
       <div class="device-top">
         <span class="status-dot"></span>
-        <div class="device-name">${escapeHtml(device.name)}<span class="device-id">${escapeHtml(device.id)}</span></div>
+        <div class="device-name">${escapeHtml(displayName(device))}<span class="device-id">${escapeHtml(device.id)}</span></div>
       </div>
       <div class="device-meta">${meta.join('')}</div>
       <div class="device-actions">
-        <button class="btn ghost" type="button" data-action="focus">Fokus</button>
+        ${positioned ? '<button class="btn ghost" type="button" data-action="focus">Fokus</button>' : ''}
+        <button class="btn ghost" type="button" data-action="manage">Kelola</button>
         ${panic ? '<button class="btn danger" type="button" data-action="resolve">Tandai Selesai</button>' : ''}
       </div>
     </li>`;
@@ -207,9 +346,11 @@
 
     state.latestPanicId = latest.id;
     els.alertBar.classList.remove('hidden');
+    els.alertFocus.disabled = !isPositioned(latest);
     els.alertText.textContent =
       `${panicDevices.length > 1 ? `${panicDevices.length} device — ` : ''}` +
-      `${latest.name} (${latest.id}) · ${relativeTime(latest.panic_since)}`;
+      `${displayName(latest)} (${latest.id}) · ${relativeTime(latest.panic_since)}` +
+      `${isPositioned(latest) ? '' : ' · lokasi belum tersedia'}`;
     document.title = `PANIC (${panicDevices.length}) — Panic Button`;
 
     if (state.soundEnabled) startAlarm();
@@ -291,6 +432,279 @@
     els.soundBtn.textContent = state.soundEnabled ? 'Suara: ON' : 'Suara: OFF';
   }
 
+  function showFormError(message) {
+    els.formError.textContent = message;
+    els.formError.classList.remove('hidden');
+  }
+
+  function hideFormError() {
+    els.formError.textContent = '';
+    els.formError.classList.add('hidden');
+  }
+
+  function setSelectValue(select, value) {
+    select.value = value || 'other';
+    if (!select.value) select.value = 'other';
+  }
+
+  function updateIdHint() {
+    if (state.editingId) {
+      els.fields.id.required = false;
+      els.idHint.textContent = 'Device ID tidak dapat diubah setelah registrasi.';
+      return;
+    }
+
+    if (els.fields.protocol.value === 'meshtastic') {
+      els.fields.id.required = true;
+      els.fields.id.placeholder = '!a1b2c3d4';
+      els.idHint.textContent =
+        'Wajib: Node ID Meshtastic (!xxxxxxxx). Lihat di aplikasi Meshtastic → Node Info.';
+    } else {
+      els.fields.id.required = false;
+      els.fields.id.placeholder = 'Kosongkan untuk memakai IMEI';
+      els.idHint.textContent =
+        'Opsional. Jika kosong, Serial/IMEI 15–16 digit dipakai sebagai Device ID. Device harus mengirim IMEI yang sama.';
+    }
+  }
+
+  function resetForm() {
+    state.editingId = null;
+    els.deviceForm.reset();
+    els.fields.id.readOnly = false;
+    els.formDelete.classList.add('hidden');
+    els.formSubmit.textContent = 'Simpan Device';
+    els.formMode.textContent = 'Tambah device baru';
+    hideFormError();
+    updateIdHint();
+    renderManageList();
+  }
+
+  function selectManageDevice(id) {
+    const device = state.manageDevices.find((item) => item.id === id) || devices.get(id);
+    if (!device) return;
+
+    state.editingId = device.id;
+    els.fields.id.value = device.id;
+    els.fields.id.readOnly = true;
+    els.fields.label.value = device.label || '';
+    setSelectValue(els.fields.type, device.device_type);
+    setSelectValue(els.fields.protocol, device.protocol);
+    els.fields.serial.value = device.serial || '';
+    els.fields.owner.value = device.owner || '';
+    els.fields.tags.value = Array.isArray(device.tags) ? device.tags.join(', ') : '';
+    els.fields.lat.value = isPositioned(device) ? String(device.lat) : '';
+    els.fields.lon.value = isPositioned(device) ? String(device.lon) : '';
+    els.fields.notes.value = device.notes || '';
+
+    els.formDelete.classList.remove('hidden');
+    els.formSubmit.textContent = 'Simpan Perubahan';
+    els.formMode.textContent = 'Edit device';
+    hideFormError();
+    updateIdHint();
+    renderManageList();
+  }
+
+  function renderManageList() {
+    const query = els.manageSearch.value.trim().toLowerCase();
+    const list = state.manageDevices.filter((device) => {
+      if (!query) return true;
+      const haystack = [
+        device.id,
+        device.name,
+        device.label,
+        device.serial,
+        device.owner,
+        ...(Array.isArray(device.tags) ? device.tags : []),
+      ]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+
+    if (!list.length) {
+      els.manageDevices.innerHTML =
+        '<li class="empty">Tidak ada device. Klik "+ Baru" untuk registrasi.</li>';
+      return;
+    }
+
+    els.manageDevices.innerHTML = list
+      .map((device) => {
+        const panic = device.status === 'panic';
+        const active = device.id === state.editingId ? ' active' : '';
+        return `<li class="manage-item${panic ? ' panic' : ''}${active}" data-id="${escapeHtml(device.id)}">
+          <div class="manage-item-name">
+            <span class="status-dot"></span>
+            <span>${escapeHtml(displayName(device))}</span>
+          </div>
+          <div class="manage-item-id">${escapeHtml(device.id)}${device.serial ? ` · ${escapeHtml(serialKind(device))} ${escapeHtml(device.serial)}` : ''}</div>
+          <div class="manage-item-meta">
+            <span class="tag accent">${escapeHtml(typeLabel(device))}</span>
+            <span class="tag">${escapeHtml(protocolLabel(device))}</span>
+            ${panic ? '<span class="tag danger">PANIC</span>' : ''}
+            ${isPositioned(device) ? '' : '<span class="tag">tanpa lokasi</span>'}
+          </div>
+        </li>`;
+      })
+      .join('');
+  }
+
+  async function refreshManageList() {
+    try {
+      const response = await fetch('/api/devices');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const list = await response.json();
+      state.manageDevices = Array.isArray(list) ? list : [];
+      renderManageList();
+    } catch (error) {
+      console.error('Gagal memuat daftar device', error);
+      showFormError('Gagal memuat daftar device. Coba lagi.');
+    }
+  }
+
+  async function openManage(id = null) {
+    els.manageOverlay.classList.remove('hidden');
+    hideFormError();
+    await refreshManageList();
+    if (id) {
+      selectManageDevice(id);
+    } else if (!state.editingId) {
+      resetForm();
+    }
+    els.manageSearch.focus();
+  }
+
+  function closeManage() {
+    els.manageOverlay.classList.add('hidden');
+  }
+
+  function collectFormPayload() {
+    const latText = els.fields.lat.value.trim();
+    const lonText = els.fields.lon.value.trim();
+
+    if ((latText && !lonText) || (!latText && lonText)) {
+      throw new Error('Latitude dan longitude harus diisi bersamaan.');
+    }
+
+    const payload = {
+      label: els.fields.label.value,
+      device_type: els.fields.type.value,
+      protocol: els.fields.protocol.value,
+      serial: els.fields.serial.value,
+      owner: els.fields.owner.value,
+      tags: els.fields.tags.value
+        .split(',')
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+      notes: els.fields.notes.value,
+    };
+
+    if (latText) {
+      payload.lat = Number(latText);
+      if (!Number.isFinite(payload.lat) || Math.abs(payload.lat) > 90) {
+        throw new Error('Latitude tidak valid.');
+      }
+    }
+    if (lonText) {
+      payload.lon = Number(lonText);
+      if (!Number.isFinite(payload.lon) || Math.abs(payload.lon) > 180) {
+        throw new Error('Longitude tidak valid.');
+      }
+    }
+
+    if (!state.editingId) {
+      const id = els.fields.id.value.trim();
+      if (!id) {
+        if (els.fields.protocol.value === 'meshtastic') {
+          throw new Error('Node ID Meshtastic wajib diisi (contoh !a1b2c3d4).');
+        }
+        if (!/^\d{15,16}$/.test(normalizeSerialInput(els.fields.serial.value))) {
+          throw new Error(
+            'Isi Device ID, atau Serial/IMEI 15–16 digit untuk memakai IMEI sebagai ID.',
+          );
+        }
+      }
+    }
+
+    return payload;
+  }
+
+  async function saveDevice(event) {
+    event.preventDefault();
+    hideFormError();
+
+    let payload;
+    try {
+      payload = collectFormPayload();
+    } catch (error) {
+      showFormError(error.message);
+      return;
+    }
+
+    els.formSubmit.disabled = true;
+    try {
+      let response;
+      if (state.editingId) {
+        response = await fetch(`/api/devices/${encodeURIComponent(state.editingId)}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        const id = els.fields.id.value.trim();
+        const body = { ...payload };
+        if (id) body.id = id;
+        response = await fetch('/api/devices', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      }
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+
+      const device = await response.json();
+      state.editingId = device.id;
+      upsertDevice(device);
+      await refreshManageList();
+      selectManageDevice(device.id);
+    } catch (error) {
+      showFormError(error.message || 'Gagal menyimpan device.');
+    } finally {
+      els.formSubmit.disabled = false;
+    }
+  }
+
+  async function deleteSelectedDevice() {
+    if (!state.editingId) return;
+    const device = devices.get(state.editingId);
+    const name = device ? displayName(device) : state.editingId;
+
+    if (!window.confirm(`Hapus device ${name} (${state.editingId})?`)) return;
+
+    els.formDelete.disabled = true;
+    try {
+      const response = await fetch(`/api/devices/${encodeURIComponent(state.editingId)}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+
+      removeDevice(state.editingId);
+      state.editingId = null;
+      resetForm();
+      await refreshManageList();
+    } catch (error) {
+      showFormError(error.message || 'Gagal menghapus device.');
+    } finally {
+      els.formDelete.disabled = false;
+    }
+  }
+
   function setConnection(status) {
     els.conn.className = `conn ${status === 'live' ? 'live' : status === 'offline' ? 'offline' : ''}`.trim();
     els.connText.textContent =
@@ -310,6 +724,9 @@
         break;
       case 'panic_cleared':
         if (message.device) upsertDevice(message.device);
+        break;
+      case 'removed':
+        if (message.id) removeDevice(message.id);
         break;
       default:
         break;
@@ -356,10 +773,12 @@
       event.stopPropagation();
       if (button.dataset.action === 'focus') focusDevice(id);
       if (button.dataset.action === 'resolve') resolveDevice(id);
+      if (button.dataset.action === 'manage') openManage(id);
       return;
     }
 
-    focusDevice(id);
+    if (markers.has(id)) focusDevice(id);
+    else openManage(id);
   });
 
   els.alertFocus.addEventListener('click', () => {
@@ -387,6 +806,38 @@
     els.sidebar.classList.toggle('open');
   });
 
+  els.manageBtn.addEventListener('click', () => openManage());
+  els.manageClose.addEventListener('click', closeManage);
+  els.manageNew.addEventListener('click', () => {
+    resetForm();
+    els.fields.id.focus();
+  });
+  els.manageSearch.addEventListener('input', renderManageList);
+  els.fields.protocol.addEventListener('change', updateIdHint);
+
+  els.manageOverlay.addEventListener('click', (event) => {
+    if (event.target === els.manageOverlay) closeManage();
+  });
+
+  els.manageDevices.addEventListener('click', (event) => {
+    const item = event.target.closest('li[data-id]');
+    if (!item) return;
+    selectManageDevice(item.dataset.id);
+  });
+
+  els.deviceForm.addEventListener('submit', saveDevice);
+  els.formDelete.addEventListener('click', deleteSelectedDevice);
+  els.formReset.addEventListener('click', () => {
+    resetForm();
+    els.fields.id.focus();
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !els.manageOverlay.classList.contains('hidden')) {
+      closeManage();
+    }
+  });
+
   setInterval(() => {
     renderSidebar();
     updateAlert();
@@ -395,5 +846,6 @@
   renderSidebar();
   updateAlert();
   updateSoundButton();
+  updateIdHint();
   connect();
 })();

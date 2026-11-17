@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f9fc">
+  <title>Panduan Setup Device — Panic Button</title>
+  <link rel="stylesheet" href="/style.css?v=20261118">
+</head>
+<body class="guide-page">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">PB</div>
+      <div>
+        <h1>Panduan Device</h1>
+        <p>Setup &amp; integrasi</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <a class="btn ghost" href="/">Kembali ke Dashboard</a>
+    </div>
+  </header>
+
+  <main class="guide-shell">
+    <aside class="guide-nav">
+      <p class="guide-nav-title">Daftar Isi</p>
+      <nav aria-label="Daftar isi panduan">
+        <a href="#status">Status deployment</a>
+        <a href="#tipe">Tipe device</a>
+        <a href="#identitas">Identitas device</a>
+        <a href="#http">HTTP / device kustom</a>
+        <a href="#panic">Panic &amp; resolve</a>
+        <a href="#registrasi">Registrasi device</a>
+        <a href="#websocket">WebSocket</a>
+        <a href="#meshtastic">Meshtastic (MQTT)</a>
+        <a href="#simulator">Simulator</a>
+        <a href="#teltonika">Teltonika</a>
+        <a href="#api">Referensi API</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+        <a href="#keamanan">Keamanan</a>
+      </nav>
+    </aside>
+
+    <article class="guide-content">
+      <section class="guide-hero">
+        <span class="badge info">Panduan setup</span>
+        <h1>Cara menghubungkan device ke Panic Button</h1>
+        <p>
+          Semua sumber data — Meshtastic, HTTP, simulator, maupun gateway lain — bermuara
+          ke satu registry yang sama. Panduan ini menjelaskan data apa yang harus dikirim,
+          ke endpoint atau topik mana, dan aturan identitas tiap tipe device.
+        </p>
+        <div class="guide-base">
+          <span>Base URL</span>
+          <code>https://panic-button.jokocloud.my.id</code>
+          <span class="badge ok">HTTPS 443</span>
+        </div>
+      </section>
+
+      <section id="status" class="guide-section">
+        <h2>Status deployment</h2>
+        <p>
+          Domain publik saat ini hanya mengekspos HTTPS 443. Artinya jalur HTTP dan WebSocket
+          siap dipakai, tetapi broker MQTT belum dapat dijangkau langsung dari internet.
+        </p>
+
+        <div class="status-grid">
+          <div class="status-card ok">
+            <span class="badge ok">Aktif</span>
+            <h3>HTTP API &amp; WebSocket</h3>
+            <p>
+              Ingest, registrasi device, panic/resolve, dan dashboard realtime tersedia lewat
+              <code>https://panic-button.jokocloud.my.id</code> dan
+              <code>wss://panic-button.jokocloud.my.id/ws</code>.
+            </p>
+          </div>
+          <div class="status-card warn">
+            <span class="badge warn">Perlu tindakan</span>
+            <h3>MQTT Meshtastic</h3>
+            <p>
+              Port 1883/8883 belum terbuka. Server juga masih memakai MQTT plaintext
+              (<code>mqtt://</code>), belum mendukung TLS. Gateway Meshtastic belum bisa
+              terhubung sampai jalur jaringan disiapkan.
+            </p>
+          </div>
+        </div>
+
+        <div class="callout warning">
+          <div>
+            <strong>Pilihan agar Meshtastic bisa terhubung</strong>
+            Gunakan <em>MQTT Client Proxy</em> dari aplikasi Meshtastic di HP yang terhubung
+            VPN ke server, buka port MQTT dengan pembatasan firewall, atau tambahkan
+            dukungan MQTT TLS 8883 di server dan broker. Detailnya ada di bagian
+            <a href="#meshtastic">Meshtastic</a>.
+          </div>
+        </div>
+      </section>
+
+      <section id="tipe" class="guide-section">
+        <h2>Tipe device dan jalur datanya</h2>
+        <p>
+          Tipe device di UI hanya metadata untuk pengelompokan. Yang menentukan cara data
+          masuk adalah <strong>protokol</strong> yang dipakai perangkat.
+        </p>
+
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Tipe</th>
+                <th>Contoh perangkat</th>
+                <th>Jalur data</th>
+                <th>Endpoint / topik</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>panic_button</code></td>
+                <td>Tombol darurat Meshtastic / GPIO</td>
+                <td>MQTT dari gateway</td>
+                <td><code>msh/&lt;region&gt;/2/json/&lt;channel&gt;/&lt;node&gt;</code></td>
+              </tr>
+              <tr>
+                <td><code>panic_button</code></td>
+                <td>Tombol darurat berbasis HTTP</td>
+                <td>HTTP ingest</td>
+                <td><code>POST /api/ingest</code> event <code>panic</code></td>
+              </tr>
+              <tr>
+                <td><code>tracker</code></td>
+                <td>Tracker GPS Meshtastic</td>
+                <td>MQTT dari gateway</td>
+                <td>paket <code>position</code></td>
+              </tr>
+              <tr>
+                <td><code>tracker</code></td>
+                <td>Tracker seluler / IMEI</td>
+                <td>HTTP ingest</td>
+                <td><code>POST /api/ingest</code> event <code>heartbeat</code></td>
+              </tr>
+              <tr>
+                <td><code>gateway</code></td>
+                <td>Node penghubung mesh</td>
+                <td>MQTT dari gateway</td>
+                <td><code>nodeinfo</code>, <code>position</code>, <code>telemetry</code></td>
+              </tr>
+              <tr>
+                <td><code>sensor</code></td>
+                <td>Sensor gerak / deteksi</td>
+                <td>MQTT atau HTTP</td>
+                <td><code>detection_sensor</code> atau <code>POST /api/ingest</code></td>
+              </tr>
+              <tr>
+                <td><code>other</code></td>
+                <td>Integrasi kustom</td>
+                <td>HTTP ingest</td>
+                <td><code>POST /api/ingest</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="identitas" class="guide-section">
+        <h2>Identitas device</h2>
+        <p>
+          Setiap device harus punya satu identitas stabil. Server memakai <code>id</code>
+          sebagai kunci state live dan penyimpanan konfigurasi.
+        </p>
+
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Jenis</th>
+                <th>Nilai</th>
+                <th>Aturan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Node ID Meshtastic</td>
+                <td><code>!a1b2c3d4</code></td>
+                <td>Wajib untuk protokol <code>meshtastic</code>. Diambil dari field <code>from</code> (desimal) menjadi 8 digit hex.</td>
+              </tr>
+              <tr>
+                <td>Device ID bebas</td>
+                <td><code>truck-01</code></td>
+                <td>Huruf, angka, dan <code>! - _ . :</code>, maksimal 64 karakter.</td>
+              </tr>
+              <tr>
+                <td>IMEI</td>
+                <td><code>357123456789012</code></td>
+                <td>15–16 digit. Jika Device ID dikosongkan, IMEI otomatis menjadi ID untuk protokol non-Meshtastic.</td>
+              </tr>
+              <tr>
+                <td>Serial / IMEI</td>
+                <td><code>SN-001</code></td>
+                <td>Disimpan di metadata. Harus unik; duplikat ditolak dengan <code>409</code>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout info">
+          <div>
+            <strong>Meshtastic tidak punya IMEI</strong>
+            Untuk node Meshtastic, isi Device ID dengan Node ID <code>!xxxxxxxx</code>.
+            Kolom Serial/IMEI boleh diisi nomor seri perangkat, bukan IMEI.
+          </div>
+        </div>
+      </section>
+
+      <section id="http" class="guide-section">
+        <h2>HTTP / device kustom</h2>
+        <p>
+          Semua perangkat yang bisa mengirim HTTP JSON dapat memakai satu endpoint yang sama:
+          <code>POST https://panic-button.jokocloud.my.id/api/ingest</code>.
+        </p>
+
+        <h3>Field request</h3>
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>Wajib</th>
+                <th>Contoh</th>
+                <th>Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>device_id</code></td>
+                <td>Ya*</td>
+                <td><code>truck-01</code></td>
+                <td>*Boleh kosong jika <code>serial</code> berisi IMEI 15–16 digit.</td>
+              </tr>
+              <tr>
+                <td><code>lat</code>, <code>lon</code></td>
+                <td>Ya</td>
+                <td><code>-6.2</code>, <code>106.8</code></td>
+                <td>Harus berpasangan, valid, dan bukan <code>0,0</code>.</td>
+              </tr>
+              <tr>
+                <td><code>event</code></td>
+                <td>Tidak</td>
+                <td><code>heartbeat</code></td>
+                <td><code>heartbeat</code>, <code>panic</code>, atau <code>panic_clear</code>. Default <code>heartbeat</code>.</td>
+              </tr>
+              <tr>
+                <td><code>name</code></td>
+                <td>Tidak</td>
+                <td><code>Truk Logistik 01</code></td>
+                <td>Nama yang dilaporkan perangkat.</td>
+              </tr>
+              <tr>
+                <td><code>serial</code></td>
+                <td>Tidak</td>
+                <td><code>357123456789012</code></td>
+                <td>Disimpan jika device belum punya serial.</td>
+              </tr>
+              <tr>
+                <td><code>speed_kmh</code></td>
+                <td>Tidak</td>
+                <td><code>42.5</code></td>
+                <td>Kecepatan dalam km/jam.</td>
+              </tr>
+              <tr>
+                <td><code>heading</code></td>
+                <td>Tidak</td>
+                <td><code>90</code></td>
+                <td>Arah dalam derajat.</td>
+              </tr>
+              <tr>
+                <td><code>battery</code></td>
+                <td>Tidak</td>
+                <td><code>87</code></td>
+                <td>Persentase baterai.</td>
+              </tr>
+              <tr>
+                <td><code>device_type</code></td>
+                <td>Tidak</td>
+                <td><code>tracker</code></td>
+                <td><code>panic_button</code>, <code>tracker</code>, <code>gateway</code>, <code>sensor</code>, <code>other</code>. Hanya dipakai saat device pertama kali dibuat.</td>
+              </tr>
+              <tr>
+                <td><code>protocol</code></td>
+                <td>Tidak</td>
+                <td><code>http</code></td>
+                <td><code>meshtastic</code>, <code>http</code>, <code>simulator</code>, <code>teltonika</code>, <code>other</code>. Default <code>http</code>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Contoh: heartbeat</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>curl — kirim posisi</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>curl -X POST https://panic-button.jokocloud.my.id/api/ingest \
+  -H 'content-type: application/json' \
+  -d '{
+    "device_id": "truck-01",
+    "name": "Truk Logistik 01",
+    "lat": -6.2,
+    "lon": 106.8,
+    "speed_kmh": 42.5,
+    "heading": 90,
+    "battery": 87,
+    "device_type": "tracker",
+    "protocol": "http",
+    "event": "heartbeat"
+  }'</code></pre>
+        </div>
+
+        <h3>Contoh: panic</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>curl — panic</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>curl -X POST https://panic-button.jokocloud.my.id/api/ingest \
+  -H 'content-type: application/json' \
+  -d '{
+    "device_id": "truck-01",
+    "lat": -6.2,
+    "lon": 106.8,
+    "event": "panic"
+  }'</code></pre>
+        </div>
+
+        <h3>Contoh: panic clear</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>curl — clear panic</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>curl -X POST https://panic-button.jokocloud.my.id/api/ingest \
+  -H 'content-type: application/json' \
+  -d '{
+    "device_id": "truck-01",
+    "lat": -6.2,
+    "lon": 106.8,
+    "event": "panic_clear"
+  }'</code></pre>
+        </div>
+
+        <div class="callout info">
+          <div>
+            <strong>Respons sukses</strong>
+            HTTP <code>200</code> dengan body berupa state device terbaru. Setelah itu device
+            langsung muncul atau bergerak di dashboard tanpa refresh.
+          </div>
+        </div>
+      </section>
+
+      <section id="panic" class="guide-section">
+        <h2>Panic &amp; resolve tanpa payload posisi</h2>
+        <p>
+          Jika device sudah dikenal server dan sudah punya posisi terakhir, panic bisa
+          dipicu tanpa mengirim <code>lat</code>/<code>lon</code>:
+        </p>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>curl — panic / resolve</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code># Tandai panic memakai posisi terakhir
+curl -X POST https://panic-button.jokocloud.my.id/api/devices/truck-01/panic
+
+# Tandai panic selesai
+curl -X POST https://panic-button.jokocloud.my.id/api/devices/truck-01/resolve</code></pre>
+        </div>
+
+        <p>
+          Keduanya mengembalikan <code>404</code> jika device belum pernah terdaftar atau
+          belum pernah mengirim data. Panic tidak hilang karena update posisi; harus
+          di-resolve eksplisit lewat endpoint ini, event <code>panic_clear</code>, atau
+          <code>detection_sensor</code> dengan <code>state: false</code>.
+        </p>
+      </section>
+
+      <section id="registrasi" class="guide-section">
+        <h2>Registrasi device</h2>
+        <p>
+          Device otomatis muncul saat pesan pertama diterima. Registrasi manual berguna
+          untuk memberi label, tipe, protokol, dan metadata sebelum device online.
+        </p>
+
+        <h3>Lewat UI</h3>
+        <ol class="steps">
+          <li>Buka dashboard, klik <strong>Kelola Device</strong>.</li>
+          <li>Klik <strong>+ Baru</strong>, lalu isi Device ID, label, tipe, protokol, dan metadata.</li>
+          <li>Isi Serial/IMEI bila perangkat memakainya. Untuk non-Meshtastic, Device ID boleh dikosongkan.</li>
+          <li>Klik <strong>Simpan Device</strong>. Konfigurasi tersimpan dan bertahan setelah restart.</li>
+        </ol>
+
+        <h3>Lewat API</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>curl — registrasi Meshtastic</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>curl -X POST https://panic-button.jokocloud.my.id/api/devices \
+  -H 'content-type: application/json' \
+  -d '{
+    "id": "!a1b2c3d4",
+    "label": "Tim Alpha",
+    "device_type": "panic_button",
+    "protocol": "meshtastic",
+    "serial": "SN-001",
+    "owner": "Satgas",
+    "tags": ["regu-1", "malam"],
+    "notes": "Unit pengamanan lapangan"
+  }'</code></pre>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>curl — tracker dengan IMEI sebagai ID</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>curl -X POST https://panic-button.jokocloud.my.id/api/devices \
+  -H 'content-type: application/json' \
+  -d '{
+    "label": "Truk Logistik 01",
+    "device_type": "tracker",
+    "protocol": "teltonika",
+    "serial": "357 123456 789012",
+    "owner": "Logistik"
+  }'</code></pre>
+        </div>
+
+        <p>
+          Pada contoh kedua, respons akan memiliki <code>id</code> dan <code>serial</code>
+          bernilai <code>357123456789012</code>. Device harus mengirim IMEI tersebut sebagai
+          <code>device_id</code> pada saat ingest.
+        </p>
+
+        <h3>Update dan hapus</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>curl — patch metadata / hapus</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code># Kirim string kosong untuk menghapus nilai opsional.
+# tags menggantikan seluruh daftar tag.
+curl -X PATCH https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4 \
+  -H 'content-type: application/json' \
+  -d '{"label": "Tim Alpha 2", "owner": "", "tags": ["regu-2"]}'
+
+curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code></pre>
+        </div>
+
+        <div class="callout warning">
+          <div>
+            <strong>Duplikat ditolak</strong>
+            ID atau serial/IMEI yang sudah dipakai device lain akan menghasilkan
+            <code>409</code>. Cari IMEI tersebut di kolom pencarian modal Kelola Device
+            sebelum mendaftarkan ulang.
+          </div>
+        </div>
+      </section>
+
+      <section id="websocket" class="guide-section">
+        <h2>WebSocket realtime</h2>
+        <p>
+          Dashboard memakai <code>wss://panic-button.jokocloud.my.id/ws</code>. Saat
+          terhubung, server mengirim <code>snapshot</code>, lalu stream perubahan.
+          Integrasi kustom dapat memakai protokol yang sama.
+        </p>
+
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Tipe pesan</th>
+                <th>Payload</th>
+                <th>Kapan dikirim</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>snapshot</code></td>
+                <td><code>devices[]</code></td>
+                <td>Saat client connect atau tertinggal dari stream.</td>
+              </tr>
+              <tr>
+                <td><code>update</code></td>
+                <td><code>device</code></td>
+                <td>Update posisi, telemetry, metadata, atau status normal.</td>
+              </tr>
+              <tr>
+                <td><code>panic</code></td>
+                <td><code>device</code></td>
+                <td>Transisi normal → panic.</td>
+              </tr>
+              <tr>
+                <td><code>panic_cleared</code></td>
+                <td><code>device</code></td>
+                <td>Panic diselesaikan.</td>
+              </tr>
+              <tr>
+                <td><code>removed</code></td>
+                <td><code>id</code></td>
+                <td>Device dihapus lewat API/UI.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout warning">
+          <div>
+            <strong>Reverse proxy</strong>
+            Jika dashboard di belakang proxy HTTPS, pastikan path <code>/ws</code> meneruskan
+            header <code>Upgrade</code> dan <code>Connection</code>. Tanpa itu, dashboard
+            tampil tetapi status koneksi tetap <em>Offline</em>.
+          </div>
+        </div>
+      </section>
+
+      <section id="meshtastic" class="guide-section">
+        <h2>Meshtastic (MQTT)</h2>
+
+        <div class="callout danger">
+          <div>
+            <strong>MQTT belum reachable dari internet</strong>
+            Domain <code>panic-button.jokocloud.my.id</code> hanya mengekspos 443, sedangkan
+            broker berjalan di 1883. Server juga masih memakai koneksi MQTT plaintext,
+            belum MQTT TLS 8883. Jangan mengarahkan gateway ke domain ini sebelum jalur
+            jaringan disiapkan.
+          </div>
+        </div>
+
+        <h3>Prasyarat perangkat</h3>
+        <ul>
+          <li>Gunakan gateway berbasis <strong>ESP32</strong> (T-Beam, Heltec V3, T-Deck, dll). Board nRF52 seperti RAK dan T-Echo tidak mendukung output JSON MQTT.</li>
+          <li>Firmware <strong>2.7.x atau lebih lama</strong> dengan opsi <em>JSON Output</em> aktif. Firmware 2.8 menghapus dukungan JSON MQTT; untuk firmware 2.8+ perlu bridge seperti <code>meshtastic/mqtt-converter</code> agar server tetap menerima JSON.</li>
+          <li>Gateway punya koneksi jaringan ke broker, baik langsung, lewat VPN, maupun melalui <em>MQTT Client Proxy</em> di HP.</li>
+        </ul>
+
+        <h3>Opsi jalur jaringan</h3>
+        <ol class="steps">
+          <li>
+            <strong>MQTT Client Proxy + VPN (tanpa buka port).</strong>
+            Aktifkan MQTT Client Proxy di aplikasi Meshtastic, hubungkan HP ke VPN yang
+            bisa mencapai server, lalu arahkan MQTT server ke IP privat server. Gateway
+            meneruskan trafik lewat HP.
+          </li>
+          <li>
+            <strong>Buka port MQTT dengan firewall.</strong>
+            Arahkan port 1883 ke server, batasi sumber IP seketat mungkin, dan sadari
+            bahwa trafik MQTT plaintext tidak terenkripsi.
+          </li>
+          <li>
+            <strong>Tambahkan MQTT TLS 8883.</strong>
+            Perlu konfigurasi TLS di Mosquitto, sertifikat, dan perubahan kode server
+            agar memakai transport TLS. Ini pekerjaan terpisah di luar halaman panduan.
+          </li>
+        </ol>
+
+        <h3>Konfigurasi MQTT di gateway</h3>
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Pengaturan</th>
+                <th>Nilai</th>
+                <th>Catatan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>MQTT Server</td>
+                <td>IP server / host yang reachable</td>
+                <td>Domain publik belum bisa dipakai selama port MQTT tertutup.</td>
+              </tr>
+              <tr>
+                <td>Port</td>
+                <td><code>1883</code></td>
+                <td>Plaintext, sesuai implementasi server saat ini. TLS 8883 belum didukung.</td>
+              </tr>
+              <tr>
+                <td>Username / Password</td>
+                <td>kosong</td>
+                <td>Broker anonim.</td>
+              </tr>
+              <tr>
+                <td>Uplink</td>
+                <td>aktif</td>
+                <td>Wajib agar data terkirim ke broker.</td>
+              </tr>
+              <tr>
+                <td>JSON Output</td>
+                <td>aktif</td>
+                <td>Wajib untuk parser server ini.</td>
+              </tr>
+              <tr>
+                <td>Root Topic</td>
+                <td><code>msh</code></td>
+                <td>Default; ubah hanya jika memakai pemisahan topik khusus.</td>
+              </tr>
+              <tr>
+                <td>Region / Channel</td>
+                <td>mis. <code>ID</code> / <code>Panic</code></td>
+                <td>Menentukan topik yang dipublikasikan.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Topik dan payload</h3>
+        <p>
+          Gateway mempublikasikan JSON ke
+          <code>msh/&lt;region&gt;/2/json/&lt;channel&gt;/&lt;userid&gt;</code>.
+          Server berlangganan wildcard <code>msh/+/2/json/+/#</code>, lalu menurunkan
+          Device ID dari field <code>from</code> (desimal) menjadi <code>!xxxxxxxx</code>.
+        </p>
+
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Field yang dipakai</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>nodeinfo</code></td>
+                <td><code>payload.longname</code>, <code>shortname</code></td>
+                <td>Menyimpan nama device.</td>
+              </tr>
+              <tr>
+                <td><code>position</code></td>
+                <td><code>latitude_i</code>, <code>longitude_i</code>, <code>ground_speed</code>, <code>ground_track</code>, <code>battery_level</code></td>
+                <td>Update posisi. Koordinat dikali <code>1e-7</code>; speed m/s dikonversi ke km/jam.</td>
+              </tr>
+              <tr>
+                <td><code>telemetry</code></td>
+                <td><code>payload.battery_level</code></td>
+                <td>Update baterai.</td>
+              </tr>
+              <tr>
+                <td><code>detection_sensor</code></td>
+                <td><code>payload.state</code> atau <code>detected</code></td>
+                <td><code>true</code> memicu panic, <code>false</code> menyelesaikan panic.</td>
+              </tr>
+              <tr>
+                <td><code>text</code></td>
+                <td><code>payload.text</code></td>
+                <td>Panic jika teks mengandung <code>PANIC</code> atau <code>SOS</code> (case-insensitive).</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>Contoh payload JSON yang diproses server:</p>
+        <div class="code-block">
+          <div class="code-head">
+            <span>JSON — position / panic / text</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>{"from":10633728,"type":"position","payload":{"latitude_i":-62000000,"longitude_i":1068000000,"ground_speed":5.0}}
+{"from":10633728,"type":"detection_sensor","payload":{"state":true}}
+{"from":10633728,"type":"text","payload":{"text":"PANIC"}}</code></pre>
+        </div>
+
+        <h3>Verifikasi di server</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>bash — cek pesan MQTT</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>docker compose exec mosquitto \
+  mosquitto_sub -t 'msh/+/2/json/+/#' -v</code></pre>
+        </div>
+
+        <p>
+          Jika tidak ada pesan, periksa uplink channel, region/channel, root topic,
+          firewall port MQTT, dan versi firmware. Registrasi manual tetap disarankan
+          agar label dan metadata sudah siap sebelum device online.
+        </p>
+      </section>
+
+      <section id="simulator" class="guide-section">
+        <h2>Simulator</h2>
+        <p>
+          Simulator menghasilkan device palsu yang bergerak di rute Jakarta dan bisa
+          memicu panic. Gunakan untuk demo tanpa hardware.
+        </p>
+
+        <h3>Mode HTTP ke domain</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>bash — simulator HTTP</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>cargo run --bin simulator -- \
+  --mode http \
+  --server https://panic-button.jokocloud.my.id \
+  --devices 3 \
+  --interval 2 \
+  --auto-panic 45</code></pre>
+        </div>
+
+        <h3>Mode MQTT lokal</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>bash — simulator MQTT</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>docker compose up -d mosquitto
+MQTT_ENABLED=true MQTT_URL=mqtt://localhost:1883 cargo run --bin server
+
+cargo run --bin simulator -- \
+  --mode mqtt \
+  --mqtt mqtt://localhost:1883 \
+  --devices 3</code></pre>
+        </div>
+
+        <h3>Interaktif di Docker</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>bash — simulator interaktif</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>docker compose --profile sim run --rm -it simulator</code></pre>
+        </div>
+
+        <p>
+          Tombol interaktif: <code>p</code> panic, <code>r</code> resolve semua,
+          <code>q</code> keluar. Tekan Enter setelah mengetik tombol.
+        </p>
+      </section>
+
+      <section id="teltonika" class="guide-section">
+        <h2>Teltonika</h2>
+
+        <div class="callout danger">
+          <div>
+            <strong>Listener TCP Teltonika belum tersedia</strong>
+            Repo ini baru menyimpan <code>protocol: "teltonika"</code> sebagai metadata.
+            Belum ada listener TCP atau codec AVL Teltonika, jadi jangan mengarahkan
+            perangkat ke port TCP apa pun di server ini.
+          </div>
+        </div>
+
+        <h3>Workaround: forward lewat HTTP</h3>
+        <p>
+          Gunakan gateway/middleware yang menerjemahkan protokol Teltonika menjadi JSON,
+          lalu kirim ke <code>POST /api/ingest</code> dengan IMEI sebagai
+          <code>device_id</code>. Daftarkan perangkat lebih dulu dengan protocol
+          <code>teltonika</code>.
+        </p>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>json — ingest via perantara</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>{
+  "device_id": "357123456789012",
+  "lat": -6.2,
+  "lon": 106.8,
+  "speed_kmh": 35.0,
+  "heading": 120,
+  "battery": 88,
+  "event": "heartbeat"
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>curl — forward ke API</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>curl -X POST https://panic-button.jokocloud.my.id/api/ingest \
+  -H 'content-type: application/json' \
+  --data-binary @payload.json</code></pre>
+        </div>
+
+        <p>
+          Jika ingin dukungan native Teltonika (TCP + codec AVL), itu fitur terpisah:
+          listener baru harus menormalisasi data ke <code>IngestEvent</code> yang sama
+          agar API dan UI tidak berubah.
+        </p>
+      </section>
+
+      <section id="api" class="guide-section">
+        <h2>Referensi API</h2>
+        <p>Semua path relatif terhadap <code>https://panic-button.jokocloud.my.id</code>.</p>
+
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Method</th>
+                <th>Path</th>
+                <th>Kegunaan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>POST</code></td>
+                <td><code>/api/ingest</code></td>
+                <td>Kirim posisi, telemetry, panic, atau panic clear dari device.</td>
+              </tr>
+              <tr>
+                <td><code>GET</code></td>
+                <td><code>/api/devices</code></td>
+                <td>Snapshot semua device live dan terdaftar.</td>
+              </tr>
+              <tr>
+                <td><code>POST</code></td>
+                <td><code>/api/devices</code></td>
+                <td>Registrasi device baru.</td>
+              </tr>
+              <tr>
+                <td><code>PATCH</code></td>
+                <td><code>/api/devices/{id}</code></td>
+                <td>Update label, tipe, protokol, metadata, atau posisi awal.</td>
+              </tr>
+              <tr>
+                <td><code>DELETE</code></td>
+                <td><code>/api/devices/{id}</code></td>
+                <td>Hapus device dari registry dan penyimpanan.</td>
+              </tr>
+              <tr>
+                <td><code>POST</code></td>
+                <td><code>/api/devices/{id}/panic</code></td>
+                <td>Tandai panic memakai posisi terakhir.</td>
+              </tr>
+              <tr>
+                <td><code>POST</code></td>
+                <td><code>/api/devices/{id}/resolve</code></td>
+                <td>Selesaikan panic.</td>
+              </tr>
+              <tr>
+                <td><code>GET</code></td>
+                <td><code>/health</code></td>
+                <td>Health check dan jumlah device.</td>
+              </tr>
+              <tr>
+                <td><code>GET</code></td>
+                <td><code>/ws</code></td>
+                <td>WebSocket realtime.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="code-block">
+          <div class="code-head">
+            <span>bash — cek server</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>curl -fsS https://panic-button.jokocloud.my.id/health</code></pre>
+        </div>
+      </section>
+
+      <section id="troubleshooting" class="guide-section">
+        <h2>Troubleshooting</h2>
+
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Gejala</th>
+                <th>Penyebab umum</th>
+                <th>Solusi</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>400 device_id wajib diisi</code></td>
+                <td>ID kosong dan serial bukan IMEI valid.</td>
+                <td>Isi <code>device_id</code> atau serial/IMEI 15–16 digit.</td>
+              </tr>
+              <tr>
+                <td><code>422 invalid coordinates</code></td>
+                <td>Lat/lon tidak berpasangan, di luar rentang, atau <code>0,0</code>.</td>
+                <td>Kirim keduanya dengan nilai valid.</td>
+              </tr>
+              <tr>
+                <td>Device ada tapi tidak di peta</td>
+                <td>Baru diregistrasi tanpa posisi, atau ingest belum pernah masuk.</td>
+                <td>Kirim <code>POST /api/ingest</code> dengan lat/lon.</td>
+              </tr>
+              <tr>
+                <td><code>409 serial/IMEI already registered</code></td>
+                <td>Serial dipakai device lain.</td>
+                <td>Cari IMEI di modal Kelola Device, lalu edit device tersebut.</td>
+              </tr>
+              <tr>
+                <td>Status WebSocket Offline</td>
+                <td>Reverse proxy tidak meneruskan Upgrade, atau server mati.</td>
+                <td>Periksa konfigurasi proxy <code>/ws</code> dan <code>/health</code>.</td>
+              </tr>
+              <tr>
+                <td>Device Meshtastic tidak muncul</td>
+                <td>JSON off, firmware 2.8+, topik/region salah, atau port MQTT tertutup.</td>
+                <td>Aktifkan JSON, pakai firmware 2.7.x atau bridge, cek topik dan konektivitas broker.</td>
+              </tr>
+              <tr>
+                <td>MQTT terhubung tapi data kosong</td>
+                <td>Channel uplink mati atau root topic berbeda.</td>
+                <td>Aktifkan uplink dan samakan root topic/region/channel.</td>
+              </tr>
+              <tr>
+                <td>Suara alarm tidak berbunyi</td>
+                <td>Browser memblokir audio sebelum interaksi pengguna.</td>
+                <td>Klik tombol <strong>Suara: OFF</strong> sekali untuk mengaktifkan.</td>
+              </tr>
+              <tr>
+                <td>Panic tidak selesai</td>
+                <td>Update posisi tidak menghapus panic.</td>
+                <td>Kirim <code>panic_clear</code>, <code>detection_sensor state:false</code>, atau panggil <code>/resolve</code>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="keamanan" class="guide-section">
+        <h2>Keamanan</h2>
+        <div class="callout danger">
+          <div>
+            <strong>Deployment ini publik</strong>
+            Tidak ada autentikasi pada API, CORS terbuka, dan broker MQTT anonim. Siapa pun
+            yang bisa menjangkau endpoint dapat membaca data, membuat device, memicu panic,
+            atau menghapus device.
+          </div>
+        </div>
+        <ul>
+          <li>Jangan gunakan untuk data sensitif tanpa menambahkan autentikasi dan otorisasi.</li>
+          <li>Batasi akses API di reverse proxy/firewall, minimal untuk operasi tulis.</li>
+          <li>Jangan membuka MQTT 1883 ke internet terbuka; gunakan VPN, ACL, atau TLS.</li>
+          <li>JSON MQTT bersifat plaintext di broker, termasuk pesan panic dan posisi.</li>
+          <li>Untuk produksi, tambahkan TLS end-to-end, autentikasi broker, dan pencatatan audit.</li>
+        </ul>
+      </section>
+
+      <p class="guide-footer">
+        Panduan ini mengikuti implementasi repo <code>panic-button</code>.
+        Kembali ke <a href="/">dashboard</a>.
+      </p>
+    </article>
+  </main>
+
+  <script>
+    (() => {
+      'use strict';
+
+      async function copyText(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        textarea.remove();
+        if (!copied) throw new Error('copy command failed');
+      }
+
+      document.querySelectorAll('[data-copy]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          const block = button.closest('.code-block');
+          const code = block ? block.querySelector('code') : null;
+          if (!code) return;
+
+          const original = button.textContent;
+          try {
+            await copyText(code.innerText);
+            button.textContent = 'Tersalin';
+          } catch (error) {
+            console.error('Gagal menyalin', error);
+            button.textContent = 'Gagal';
+          }
+          setTimeout(() => {
+            button.textContent = original;
+          }, 1500);
+        });
+      });
+
+      const links = [...document.querySelectorAll('.guide-nav a')];
+      const sections = links
+        .map((link) => document.querySelector(link.getAttribute('href')))
+        .filter(Boolean);
+
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            links.forEach((link) => {
+              link.classList.toggle('active', link.getAttribute('href') === `#${entry.target.id}`);
+            });
+          });
+        }, { rootMargin: '-15% 0px -70% 0px' });
+
+        sections.forEach((section) => observer.observe(section));
+      }
+    })();
+  </script>
+</body>
+</html>

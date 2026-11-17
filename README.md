@@ -7,6 +7,8 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
 ## Fitur
 
 - Live tracking posisi device di peta (WebSocket, tanpa refresh).
+- Panduan setup device per tipe/protokol di `/panduan.html`: endpoint HTTP, topik MQTT,
+  registrasi, panic/resolve, simulator, dan status dukungan Teltonika.
 - Alert panic realtime: marker merah berkedip, banner, auto-pan ke lokasi, dan suara.
 - Daftar device dengan status, kecepatan, baterai, dan waktu terakhir terlihat.
 - Menu **Kelola Device**: registrasi device, label, tipe, protokol, serial/IMEI, pemilik,
@@ -186,7 +188,8 @@ tidak menghapus data. Resource limit per service dijelaskan di bagian
 docker compose up --build -d
 ```
 
-Buka `http://<host>:8080`.
+Buka `http://<host>:8080`. Panduan setup device tersedia di
+`http://<host>:8080/panduan.html`.
 
 Demo dengan simulator (auto panic tiap 45 detik):
 
@@ -306,6 +309,13 @@ docker compose exec mosquitto mosquitto_sub -t 'msh/+/2/json/+/#' -v
 Pastikan port `1883` VPS terbuka di firewall agar gateway bisa publish. Jika memakai
 broker Meshtastic publik (`mqtt.meshtastic.org`), ganti `MQTT_URL` dan `MQTT_TOPIC`
 sesuai region/channel yang dipakai.
+
+> **Kompatibilitas firmware:** firmware Meshtastic 2.8 menghapus output JSON MQTT.
+> Gunakan firmware 2.7.x atau bridge `meshtastic/mqtt-converter` agar server ini tetap
+> menerima JSON. Server saat ini juga baru mendukung MQTT plaintext (`mqtt://`); MQTT
+> TLS 8883 memerlukan konfigurasi broker dan dukungan transport TLS di server. Jika
+> domain publik hanya mengekspos port 443, gateway tidak bisa terhubung langsung —
+> gunakan VPN/MQTT Client Proxy atau buka port MQTT dengan pembatasan firewall.
 
 ## API
 
@@ -479,6 +489,7 @@ cargo fmt --check
 │       └── simulator.rs  # Simulator device (HTTP/MQTT)
 └── static/
     ├── index.html
+    ├── panduan.html      # Panduan setup device
     ├── app.js
     └── style.css
 ```

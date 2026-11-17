@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panic Button — Live Tracking</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">PB</div>
+      <div>
+        <h1>Panic Button</h1>
+        <p>Live tracking &middot; Meshtastic</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="sound-btn" class="btn ghost" type="button">Suara: OFF</button>
+      <div id="conn" class="conn offline">
+        <span class="conn-dot"></span>
+        <span id="conn-text">Menghubungkan</span>
+      </div>
+      <button id="sidebar-toggle" class="btn ghost only-mobile" type="button">Daftar</button>
+    </div>
+  </header>
+
+  <div id="alert-bar" class="alert-bar hidden">
+    <div class="alert-info">
+      <span class="alert-tag">PANIC</span>
+      <span id="alert-text">Menunggu data</span>
+    </div>
+    <div class="alert-actions">
+      <button id="alert-focus" class="btn" type="button">Fokus</button>
+      <button id="alert-resolve" class="btn danger" type="button">Tandai Selesai</button>
+    </div>
+  </div>
+
+  <main class="layout">
+    <div id="map" class="map"></div>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-head">
+        <h2>Device</h2>
+        <span id="device-count" class="chip">0</span>
+      </div>
+      <ul id="device-list" class="device-list"></ul>
+      <footer class="sidebar-foot">
+        <span>Update realtime via WebSocket</span>
+        <span id="panic-count" class="panic-count">0 panic</span>
+      </footer>
+    </aside>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

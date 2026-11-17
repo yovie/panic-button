@@ -3,12 +3,18 @@ SHELL := /bin/bash
 SERVER_PORT ?= 18080
 MQTT_PORT ?= 1883
 
+STAGING_HOST ?= devserver
+STAGING_DIR ?= panic-button-staging
+STAGING_PROJECT ?= panic-button-staging
+STAGING_PORT ?= 18080
+STAGING_MQTT_PORT ?= 1883
+
 COMPOSE := SERVER_PORT=$(SERVER_PORT) MQTT_PORT=$(MQTT_PORT) docker compose
 CARGO := $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build deploy-dev stop-dev logs ps sim test fmt clippy check clean
+.PHONY: help build deploy-dev stop-dev deploy-staging stop-staging logs ps sim test fmt clippy check clean
 
 help:
 	@echo "Panic Button"
@@ -17,6 +23,9 @@ help:
 	@echo "                    Web UI : http://localhost:$(SERVER_PORT)"
 	@echo "                    MQTT   : localhost:$(MQTT_PORT) (anonim, publik)"
 	@echo "  make stop-dev     Hentikan semua service (volume broker disimpan)"
+	@echo "  make deploy-staging  Build lokal, kirim source + image ke $(STAGING_HOST), lalu deploy"
+	@echo "                    Web UI : http://$(STAGING_HOST):$(STAGING_PORT)"
+	@echo "  make stop-staging Hentikan staging di $(STAGING_HOST) (volume disimpan)"
 	@echo "  make clean        Hentikan semua service dan hapus volume"
 	@echo "  make logs         Ikuti log semua service"
 	@echo "  make ps           Status container"
@@ -45,6 +54,28 @@ deploy-dev: build
 
 stop-dev:
 	$(COMPOSE) --profile sim down
+
+deploy-staging: build
+	@echo "Sinkronisasi source ke $(STAGING_HOST):$(STAGING_DIR) ..."
+	rsync -az --delete \
+		--exclude '.git/' \
+		--exclude 'target/' \
+		--exclude '.env' \
+		--exclude 'data/' \
+		./ $(STAGING_HOST):$(STAGING_DIR)/
+	@echo "Kirim image ke $(STAGING_HOST) ..."
+	set -o pipefail; docker save panic-button-server:latest | ssh $(STAGING_HOST) 'docker load'
+	ssh $(STAGING_HOST) 'set -e; cd "$(STAGING_DIR)"; COMPOSE_PROJECT_NAME=$(STAGING_PROJECT) SERVER_PORT=$(STAGING_PORT) MQTT_PORT=$(STAGING_MQTT_PORT) docker compose up -d --no-build --remove-orphans --wait mosquitto server'
+	@ssh $(STAGING_HOST) 'curl -fsS http://127.0.0.1:$(STAGING_PORT)/health'; echo
+	@echo ""
+	@echo "Staging aktif di $(STAGING_HOST):"
+	@echo "  Web UI      : http://$(STAGING_HOST):$(STAGING_PORT)"
+	@echo "  MQTT broker : $(STAGING_HOST):$(STAGING_MQTT_PORT) (anonim, publik)"
+	@echo "  Data device : volume Docker (persisten)"
+	@echo "  Stop        : make stop-staging"
+
+stop-staging:
+	ssh $(STAGING_HOST) 'set -e; cd "$(STAGING_DIR)"; COMPOSE_PROJECT_NAME=$(STAGING_PROJECT) SERVER_PORT=$(STAGING_PORT) MQTT_PORT=$(STAGING_MQTT_PORT) docker compose down'
 
 clean:
 	$(COMPOSE) --profile sim down -v --remove-orphans

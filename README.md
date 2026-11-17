@@ -228,6 +228,52 @@ make clean                         # hentikan + hapus volume
 make check                         # cargo fmt + clippy + test
 ```
 
+## Deploy Staging via SSH
+
+Target ini build image secara lokal, mengirim source dari working tree saat ini
+dan image tersebut ke server staging, lalu menjalankan `mosquitto` + `server`
+di sana (tanpa simulator):
+
+```bash
+make deploy-staging
+```
+
+Prasyarat: alias SSH `devserver` bisa dipakai (`ssh devserver`), `rsync` tersedia
+di lokal dan server, Docker + Docker Compose di lokal dan server. Server staging
+tidak perlu toolchain Rust karena image dikirim lewat `docker save | docker load`.
+Default staging:
+
+| Variabel | Default | Keterangan |
+|---|---|---|
+| `STAGING_HOST` | `devserver` | Alias/host SSH |
+| `STAGING_DIR` | `panic-button-staging` | Direktori relatif terhadap home user SSH |
+| `STAGING_PROJECT` | `panic-button-staging` | Nama project Docker Compose di staging |
+| `STAGING_PORT` | `18080` | Port web UI/API di server staging |
+| `STAGING_MQTT_PORT` | `1883` | Port broker MQTT di server staging |
+
+Web UI dapat dibuka langsung di `http://devserver:18080` jika hostname tersebut
+bisa di-resolve dari browser. Jika tidak, gunakan tunnel SSH:
+
+```bash
+ssh -L 18080:127.0.0.1:18080 devserver
+# lalu buka http://localhost:18080
+```
+
+Deploy mengikuti isi working tree (termasuk perubahan yang belum di-commit),
+tetapi `.env`, `.git`, `target`, dan `data` lokal tidak disalin. Data device
+staging disimpan di volume Docker sehingga tetap ada saat container dibuat ulang.
+Hentikan staging dengan:
+
+```bash
+make stop-staging
+```
+
+Override contoh:
+
+```bash
+make deploy-staging STAGING_PORT=18081 STAGING_MQTT_PORT=11883
+```
+
 ## Menghubungkan Device Meshtastic
 
 1. Gunakan gateway berbasis **ESP32** (mis. T-Beam, Heltec V3, T-Deck). Board nRF52

@@ -60,8 +60,10 @@
       <section id="status" class="guide-section">
         <h2>Status deployment</h2>
         <p>
-          Domain publik saat ini hanya mengekspos HTTPS 443. Artinya jalur HTTP dan WebSocket
-          siap dipakai, tetapi broker MQTT belum dapat dijangkau langsung dari internet.
+          Staging <code>panic-button.jokocloud.my.id</code> saat ini hanya mengekspos
+          HTTPS 443. Jalur HTTP dan WebSocket siap dipakai, tetapi broker MQTT belum dapat
+          dijangkau langsung dari internet. Di server staging, Mosquitto menyediakan MQTT
+          TLS 8883 dengan autentikasi untuk device di jaringan lokal.
         </p>
 
         <div class="status-grid">
@@ -75,12 +77,13 @@
             </p>
           </div>
           <div class="status-card warn">
-            <span class="badge warn">Perlu tindakan</span>
+            <span class="badge warn">Staging siap, publik tertutup</span>
             <h3>MQTT Meshtastic</h3>
             <p>
-              Port 1883/8883 belum terbuka. Server juga masih memakai MQTT plaintext
-              (<code>mqtt://</code>), belum mendukung TLS. Gateway Meshtastic belum bisa
-              terhubung sampai jalur jaringan disiapkan.
+              Server staging membuka <code>8883</code> dengan TLS + username/password,
+              sedangkan <code>1883</code> tetap anonim untuk internal. Port MQTT belum
+              diekspos ke internet; gateway publik belum bisa terhubung sampai jalur
+              jaringan disiapkan.
             </p>
           </div>
         </div>
@@ -88,9 +91,9 @@
         <div class="callout warning">
           <div>
             <strong>Pilihan agar Meshtastic bisa terhubung</strong>
-            Gunakan <em>MQTT Client Proxy</em> dari aplikasi Meshtastic di HP yang terhubung
-            VPN ke server, buka port MQTT dengan pembatasan firewall, atau tambahkan
-            dukungan MQTT TLS 8883 di server dan broker. Detailnya ada di bagian
+            Hubungkan gateway ke broker staging lewat LAN dengan TLS <code>8883</code>, gunakan
+            <em>MQTT Client Proxy</em> + VPN, atau buka port MQTT di firewall dengan
+            pembatasan. Detail dan kredensial ada di bagian
             <a href="#meshtastic">Meshtastic</a>.
           </div>
         </div>
@@ -528,11 +531,13 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
 
         <div class="callout danger">
           <div>
-            <strong>MQTT belum reachable dari internet</strong>
-            Domain <code>panic-button.jokocloud.my.id</code> hanya mengekspos 443, sedangkan
-            broker berjalan di 1883. Server juga masih memakai koneksi MQTT plaintext,
-            belum MQTT TLS 8883. Jangan mengarahkan gateway ke domain ini sebelum jalur
-            jaringan disiapkan.
+            <strong>MQTT publik belum reachable</strong>
+            Domain <code>panic-button.jokocloud.my.id</code> hanya mengekspos 443 untuk
+            HTTP/WebSocket. Broker staging membuka <code>8883</code> (TLS + auth) dan
+            <code>1883</code> (anonim, internal), tetapi keduanya belum diekspos ke
+            internet. Jangan mengarahkan gateway ke
+            <code>panic-button.jokocloud.my.id:8883</code> sebelum port dan firewall
+            disiapkan; untuk device di LAN, gunakan <code>IP-LAN:8883</code>.
           </div>
         </div>
 
@@ -541,10 +546,19 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
           <li>Gunakan gateway berbasis <strong>ESP32</strong> (T-Beam, Heltec V3, T-Deck, dll). Board nRF52 seperti RAK dan T-Echo tidak mendukung output JSON MQTT.</li>
           <li>Firmware <strong>2.7.x atau lebih lama</strong> dengan opsi <em>JSON Output</em> aktif. Firmware 2.8 menghapus dukungan JSON MQTT; untuk firmware 2.8+ perlu bridge seperti <code>meshtastic/mqtt-converter</code> agar server tetap menerima JSON.</li>
           <li>Gateway punya koneksi jaringan ke broker, baik langsung, lewat VPN, maupun melalui <em>MQTT Client Proxy</em> di HP.</li>
+          <li>Untuk listener <code>8883</code>: username <code>meshtastic</code> dan password dari <code>mosquitto/.mqtt-password</code> (dibuat dengan <code>make mqtt-setup</code>).</li>
         </ul>
 
         <h3>Opsi jalur jaringan</h3>
         <ol class="steps">
+          <li>
+            <strong>Hubungkan lewat LAN dengan TLS 8883.</strong>
+            Server staging sudah menyediakan listener <code>8883</code> dengan TLS dan
+            username/password. Arahkan gateway ke <code>IP-LAN:8883</code>, aktifkan TLS,
+            lalu isi kredensial dari <code>mosquitto/.mqtt-password</code>. Sertifikat
+            bersifat self-signed; firmware Meshtastic memakai <code>setInsecure</code>
+            sehingga tetap bisa terhubung.
+          </li>
           <li>
             <strong>MQTT Client Proxy + VPN (tanpa buka port).</strong>
             Aktifkan MQTT Client Proxy di aplikasi Meshtastic, hubungkan HP ke VPN yang
@@ -553,13 +567,9 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
           </li>
           <li>
             <strong>Buka port MQTT dengan firewall.</strong>
-            Arahkan port 1883 ke server, batasi sumber IP seketat mungkin, dan sadari
-            bahwa trafik MQTT plaintext tidak terenkripsi.
-          </li>
-          <li>
-            <strong>Tambahkan MQTT TLS 8883.</strong>
-            Perlu konfigurasi TLS di Mosquitto, sertifikat, dan perubahan kode server
-            agar memakai transport TLS. Ini pekerjaan terpisah di luar halaman panduan.
+            Utamakan port <code>8883</code> (TLS + auth) dan batasi sumber IP seketat
+            mungkin. Hindari mengekspos <code>1883</code> ke internet terbuka karena
+            trafiknya plaintext dan anonim; port itu hanya untuk jaringan internal.
           </li>
         </ol>
 
@@ -576,18 +586,18 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
             <tbody>
               <tr>
                 <td>MQTT Server</td>
-                <td>IP server / host yang reachable</td>
-                <td>Domain publik belum bisa dipakai selama port MQTT tertutup.</td>
+                <td>IP LAN host staging, mis. <code>IP-LAN</code></td>
+                <td>Domain staging hanya untuk HTTP/WS selama port MQTT tertutup.</td>
               </tr>
               <tr>
                 <td>Port</td>
-                <td><code>1883</code></td>
-                <td>Plaintext, sesuai implementasi server saat ini. TLS 8883 belum didukung.</td>
+                <td><code>8883</code> (TLS)</td>
+                <td>Gunakan TLS aktif. <code>1883</code> plaintext hanya untuk internal/Docker.</td>
               </tr>
               <tr>
                 <td>Username / Password</td>
-                <td>kosong</td>
-                <td>Broker anonim.</td>
+                <td><code>meshtastic</code> / isi <code>mosquitto/.mqtt-password</code></td>
+                <td>Hanya untuk listener 8883. Jangan aktifkan anonymous di gateway.</td>
               </tr>
               <tr>
                 <td>Uplink</td>
@@ -611,6 +621,34 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <h3>Tes koneksi TLS</h3>
+        <div class="code-block">
+          <div class="code-head">
+            <span>bash — subscribe via TLS</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>docker exec -it panic-button-mosquitto-1 mosquitto_sub \
+  -h 127.0.0.1 -p 8883 \
+  --cafile /mosquitto/certs/server.crt \
+  -u meshtastic -P "$(cat mosquitto/.mqtt-password)" \
+  -t 'msh/+/2/json/+/#' -v</code></pre>
+        </div>
+        <p>
+          Publish manual untuk menguji jalur device ke server:
+        </p>
+        <div class="code-block">
+          <div class="code-head">
+            <span>bash — publish via TLS</span>
+            <button class="copy-btn" type="button" data-copy>Salin</button>
+          </div>
+          <pre><code>docker exec -it panic-button-mosquitto-1 mosquitto_pub \
+  -h 127.0.0.1 -p 8883 \
+  --cafile /mosquitto/certs/server.crt \
+  -u meshtastic -P "$(cat mosquitto/.mqtt-password)" \
+  -t 'msh/ID/2/json/Panic/!test' \
+  -m '{"from":53261,"type":"position","payload":{"latitude_i":-62000000,"longitude_i":1068000000}}'</code></pre>
         </div>
 
         <h3>Topik dan payload</h3>
@@ -723,6 +761,11 @@ cargo run --bin simulator -- \
   --mqtt mqtt://localhost:1883 \
   --devices 3</code></pre>
         </div>
+        <p>
+          Simulator memakai <code>1883</code> plaintext di jaringan lokal/Docker. Untuk
+          menguji listener <code>8883</code> dengan TLS dan kredensial, gunakan perintah
+          <code>mosquitto_pub</code> di bagian <a href="#meshtastic">Meshtastic</a>.
+        </p>
 
         <h3>Interaktif di Docker</h3>
         <div class="code-block">
@@ -904,8 +947,8 @@ cargo run --bin simulator -- \
               </tr>
               <tr>
                 <td>Device Meshtastic tidak muncul</td>
-                <td>JSON off, firmware 2.8+, topik/region salah, atau port MQTT tertutup.</td>
-                <td>Aktifkan JSON, pakai firmware 2.7.x atau bridge, cek topik dan konektivitas broker.</td>
+                <td>JSON off, firmware 2.8+, topik/region salah, port MQTT tertutup, atau kredensial/TLS salah.</td>
+                <td>Aktifkan JSON, pakai firmware 2.7.x atau bridge, cek topik, konektivitas broker, dan kredensial 8883.</td>
               </tr>
               <tr>
                 <td>MQTT terhubung tapi data kosong</td>
@@ -932,17 +975,18 @@ cargo run --bin simulator -- \
         <div class="callout danger">
           <div>
             <strong>Deployment ini publik</strong>
-            Tidak ada autentikasi pada API, CORS terbuka, dan broker MQTT anonim. Siapa pun
-            yang bisa menjangkau endpoint dapat membaca data, membuat device, memicu panic,
-            atau menghapus device.
+            Tidak ada autentikasi pada API dan CORS terbuka. Broker MQTT <code>1883</code>
+            anonim untuk jaringan internal, sedangkan <code>8883</code> memakai TLS +
+            username/password. Siapa pun yang bisa menjangkau endpoint API dapat membaca
+            data, membuat device, memicu panic, atau menghapus device.
           </div>
         </div>
         <ul>
           <li>Jangan gunakan untuk data sensitif tanpa menambahkan autentikasi dan otorisasi.</li>
           <li>Batasi akses API di reverse proxy/firewall, minimal untuk operasi tulis.</li>
-          <li>Jangan membuka MQTT 1883 ke internet terbuka; gunakan VPN, ACL, atau TLS.</li>
-          <li>JSON MQTT bersifat plaintext di broker, termasuk pesan panic dan posisi.</li>
-          <li>Untuk produksi, tambahkan TLS end-to-end, autentikasi broker, dan pencatatan audit.</li>
+          <li>Jangan membuka MQTT 1883 ke internet terbuka; gunakan 8883 (TLS + auth), VPN, atau ACL.</li>
+          <li>JSON MQTT tidak dienkripsi end-to-end; pada listener 1883 payload juga plaintext di jaringan. Siapa pun yang memegang kredensial 8883 dan akses broker dapat membaca pesan panic dan posisi.</li>
+          <li>Server masih berlangganan ke broker lewat 1883 di jaringan Docker. Untuk produksi, pertimbangkan <code>mqtts://</code> untuk subscriber, API auth, dan pencatatan audit.</li>
         </ul>
       </section>
 

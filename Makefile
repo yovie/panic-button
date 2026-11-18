@@ -4,7 +4,7 @@ SERVER_PORT ?= 18080
 MQTT_PORT ?= 1883
 DEV_DOMAIN ?= panicbutton.localhost
 
-DEV_URL := http://$(DEV_DOMAIN):$(SERVER_PORT)
+DEV_URL ?= http://$(DEV_DOMAIN)
 
 STAGING_HOST ?= devserver
 STAGING_DIR ?= panic-button-staging
@@ -17,7 +17,7 @@ CARGO := $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build deploy-dev stop-dev deploy-staging stop-staging logs ps sim test fmt clippy check clean
+.PHONY: help build deploy-dev stop-dev deploy-staging stop-staging nginx logs ps sim test fmt clippy check clean
 
 help:
 	@echo "Panic Button"
@@ -26,6 +26,7 @@ help:
 	@echo "                    Web UI : $(DEV_URL)"
 	@echo "                    MQTT   : $(DEV_DOMAIN):$(MQTT_PORT) (anonim, publik)"
 	@echo "  make stop-dev     Hentikan semua service (volume broker disimpan)"
+	@echo "  make nginx        Aktifkan vhost nginx $(DEV_URL) (perlu sudo)"
 	@echo "  make deploy-staging  Build lokal, kirim source + image ke $(STAGING_HOST), lalu deploy"
 	@echo "                    Web UI : http://$(STAGING_HOST):$(STAGING_PORT)"
 	@echo "  make stop-staging Hentikan staging di $(STAGING_HOST) (volume disimpan)"
@@ -58,6 +59,13 @@ deploy-dev: build
 
 stop-dev:
 	$(COMPOSE) --profile sim down
+
+nginx:
+	sudo ln -sfn "$(CURDIR)/nginx/panicbutton.localhost.conf" \
+		/etc/nginx/sites-enabled/panicbutton.localhost.conf
+	sudo nginx -t
+	sudo systemctl reload nginx
+	@echo "Vhost aktif: $(DEV_URL)"
 
 deploy-staging: build
 	@echo "Sinkronisasi source ke $(STAGING_HOST):$(STAGING_DIR) ..."

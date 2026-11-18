@@ -16,10 +16,12 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
   setelah restart.
 - **IMEI sebagai Device ID** untuk protokol non-Meshtastic: Device ID boleh dikosongkan,
   IMEI 15–16 digit dipakai sebagai ID. Serial/IMEI unik dan ikut tercari di modal.
-- Ingest Meshtastic via MQTT (nodeinfo, position, telemetry, detection_sensor, text keyword).
+- Ingest Meshtastic via MQTT (nodeinfo, position, telemetry, detection_sensor, text keyword),
+  termasuk listener TLS 8883 dengan username/password untuk development.
 - Ingest HTTP generik untuk perangkat lain/simulator.
 - Simulator dua mode (HTTP dan Meshtastic MQTT) untuk demo tanpa hardware.
-- Mode publik: tanpa login, CORS terbuka, broker MQTT anonim.
+- Mode publik: tanpa login dan CORS terbuka; broker MQTT `1883` anonim untuk lokal,
+  `8883` TLS + auth untuk device eksternal.
 
 ## Arsitektur
 
@@ -30,7 +32,7 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
                           │                                                      │
   Meshtastic node         │   ┌────────────┐        ┌───────────────────────┐   │
   (LoRa) ──> gateway ─────┼──>│ mosquitto  │──MQTT─>│ server (Rust/tokio)   │   │
-  (ESP32, JSON MQTT)      │   │  :1883     │        │  Axum HTTP + WS       │   │
+  (ESP32, JSON MQTT)      │   │ 1883/8883  │        │  Axum HTTP + WS       │   │
                           │   └────────────┘        │  MQTT subscriber      │   │
                           │                         │  Registry (in-memory) │   │
   simulator ──────────────┼── HTTP /api/ingest ────>│  broadcast channel    │   │
@@ -49,7 +51,7 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
 | Komponen | Teknologi | Peran |
 |---|---|---|
 | `server` | Rust 2024, Axum 0.8, tokio | HTTP API, WebSocket, serve UI statis, subscriber MQTT |
-| `mosquitto` | Eclipse Mosquitto 2 | Broker MQTT anonim, menerima publish dari gateway/simulator |
+| `mosquitto` | Eclipse Mosquitto 2 | Broker MQTT: 1883 anonim (internal/lokal) dan 8883 TLS + auth (device eksternal) |
 | `simulator` | Rust (binary yang sama) | Device palsu: bergerak di rute, memicu panic/resolve |
 | Browser | Leaflet 1.9, OpenStreetMap, vanilla JS | Peta live, marker, alert panic, suara, auto-reconnect, modal Kelola Device |
 | Gateway Meshtastic | ESP32 (T-Beam, Heltec, dll) | Menjembatani trafik LoRa mesh ke MQTT JSON |
@@ -158,7 +160,7 @@ Topik: `msh/<region>/2/json/<channel>/<userid>` (subscribe default
 | Container | Image | Port internal | Port host (default) | Healthcheck |
 |---|---|---|---|---|
 | `server` | `panic-button-server:latest` (build lokal) | 8080 | `SERVER_PORT` (18080 via Makefile) | `GET /health` |
-| `mosquitto` | `eclipse-mosquitto:2` | 1883 | `MQTT_PORT` (1883) | `mosquitto_sub` ke `$SYS` |
+| `mosquitto` | `eclipse-mosquitto:2` | 1883, 8883 | `MQTT_PORT` (1883), `MQTT_TLS_PORT` (8883) | `mosquitto_sub` ke `$SYS` |
 | `simulator` | sama dengan server | - | - | dinonaktifkan |
 
 `server` dan `mosquitto` selalu berjalan; `simulator` memakai profile `sim` agar
@@ -281,7 +283,8 @@ Default staging:
 | `STAGING_DIR` | `panic-button-staging` | Direktori relatif terhadap home user SSH |
 | `STAGING_PROJECT` | `panic-button-staging` | Nama project Docker Compose di staging |
 | `STAGING_PORT` | `18080` | Port web UI/API di server staging |
-| `STAGING_MQTT_PORT` | `1883` | Port broker MQTT di server staging |
+| `STAGING_MQTT_PORT` | `1883` | Port broker MQTT plaintext di server staging |
+| `STAGING_MQTT_TLS_PORT` | `8883` | Port broker MQTT TLS di server staging |
 
 Web UI dapat dibuka langsung di `http://devserver:18080` jika hostname tersebut
 bisa di-resolve dari browser. Jika tidak, gunakan tunnel SSH:
@@ -311,8 +314,11 @@ make deploy-staging STAGING_PORT=18081 STAGING_MQTT_PORT=11883
 1. Gunakan gateway berbasis **ESP32** (mis. T-Beam, Heltec V3, T-Deck). Board nRF52
    (RAK, T-Echo) tidak mendukung output JSON MQTT.
 2. Aktifkan modul MQTT di gateway:
-   - Server: IP/domain VPS, port `1883`
-   - Username/password: kosong (broker anonim)
+   - Server: untuk dev gunakan `mqtt.jokocloud.my.id` port `8883` dengan TLS aktif;
+     untuk publik gunakan IP/domain VPS port `1883` (plaintext) atau `8883` (TLS)
+     setelah port dibuka
+   - Username/password: `meshtastic` dan isi `mosquitto/.mqtt-password` untuk dev;
+     untuk broker publik gunakan kredensial broker Anda
    - Uplink: aktif
    - JSON output: aktif
    - Channel/region: sesuaikan dengan mesh Anda
@@ -335,16 +341,17 @@ Verifikasi pesan masuk ke broker:
 docker compose exec mosquitto mosquitto_sub -t 'msh/+/2/json/+/#' -v
 ```
 
-Pastikan port `1883` VPS terbuka di firewall agar gateway bisa publish. Jika memakai
-broker Meshtastic publik (`mqtt.meshtastic.org`), ganti `MQTT_URL` dan `MQTT_TOPIC`
-sesuai region/channel yang dipakai.
+Pastikan port MQTT (`1883` plaintext atau `8883` TLS) terbuka di firewall agar gateway
+bisa publish. Jika memakai broker Meshtastic publik (`mqtt.meshtastic.org`), ganti
+`MQTT_URL` dan `MQTT_TOPIC` sesuai region/channel yang dipakai.
 
 > **Kompatibilitas firmware:** firmware Meshtastic 2.8 menghapus output JSON MQTT.
 > Gunakan firmware 2.7.x atau bridge `meshtastic/mqtt-converter` agar server ini tetap
-> menerima JSON. Server saat ini juga baru mendukung MQTT plaintext (`mqtt://`); MQTT
-> TLS 8883 memerlukan konfigurasi broker dan dukungan transport TLS di server. Jika
-> domain publik hanya mengekspos port 443, gateway tidak bisa terhubung langsung —
-> gunakan VPN/MQTT Client Proxy atau buka port MQTT dengan pembatasan firewall.
+> menerima JSON. Di dev stack, Mosquitto sudah menyediakan listener TLS 8883 dengan
+> auth untuk device; server tetap berlangganan lewat `1883` di jaringan Docker dan
+> belum mendukung `mqtts://` untuk broker remote. Jika domain publik hanya mengekspos
+> port 443, gateway tidak bisa terhubung langsung — gunakan VPN/MQTT Client Proxy atau
+> buka port MQTT dengan pembatasan firewall.
 
 ## API
 
@@ -454,7 +461,8 @@ memperbarui registry dan menyiarkan `update`/`removed` via WebSocket.
 | Env | Default | Keterangan |
 |---|---|---|
 | `SERVER_PORT` | `8080` | Port host container server (Makefile: 18080, diakses via nginx) |
-| `MQTT_PORT` | `1883` | Port host untuk broker MQTT |
+| `MQTT_PORT` | `1883` | Port host broker MQTT plaintext (lokal/Docker) |
+| `MQTT_TLS_PORT` | `8883` | Port host broker MQTT TLS + auth |
 | `RUST_LOG` | `info` | Level log server |
 | `MQTT_ENABLED` | `true` | Aktifkan subscriber Meshtastic |
 | `MQTT_URL` | `mqtt://mosquitto:1883` | URL broker |
@@ -495,6 +503,62 @@ MQTT_ENABLED=true MQTT_URL=mqtt://localhost:1883 cargo run --bin server
 cargo run --bin simulator -- --mode mqtt --mqtt mqtt://localhost:1883 --devices 3
 ```
 
+### MQTT TLS Lokal
+
+Mosquitto di dev stack membuka dua listener:
+
+- `1883` — plaintext dan anonim; dipakai `server` dan `simulator` di jaringan Docker.
+- `8883` — TLS dengan username/password; untuk device atau klien eksternal.
+
+Buat sertifikat dan kredensial sekali (butuh `openssl` dan Docker):
+
+```bash
+make mqtt-setup
+```
+
+`make deploy-dev` juga menjalankan langkah ini otomatis. File yang dihasilkan bersifat
+gitignored:
+
+- `mosquitto/certs/server.crt` dan `server.key` — self-signed, SAN `mqtt.jokocloud.my.id`,
+  `localhost`, dan `127.0.0.1`.
+- `mosquitto/passwd` — hash password untuk user `meshtastic`.
+- `mosquitto/.mqtt-password` — password plaintext; baca dengan
+  `cat mosquitto/.mqtt-password`.
+
+Tes subscribe lewat TLS:
+
+```bash
+docker exec -it panic-button-mosquitto-1 mosquitto_sub \
+  -h 127.0.0.1 -p 8883 \
+  --cafile /mosquitto/certs/server.crt \
+  -u meshtastic -P "$(cat mosquitto/.mqtt-password)" \
+  -t 'msh/+/2/json/+/#' -v
+```
+
+Tes publish posisi lewat TLS:
+
+```bash
+docker exec -it panic-button-mosquitto-1 mosquitto_pub \
+  -h 127.0.0.1 -p 8883 \
+  --cafile /mosquitto/certs/server.crt \
+  -u meshtastic -P "$(cat mosquitto/.mqtt-password)" \
+  -t 'msh/ID/2/json/Panic/!test' \
+  -m '{"from":53261,"type":"position","payload":{"latitude_i":-62000000,"longitude_i":1068000000}}'
+```
+
+Catatan:
+
+- Sertifikat self-signed. Firmware Meshtastic memakai TLS tanpa validasi sertifikat
+  (`setInsecure`), jadi tetap bisa terhubung. Untuk `mosquitto_sub`, gunakan `--cafile`;
+  `--insecure` hanya untuk tes cepat.
+- Device di jaringan LAN yang sama dapat memakai `IP-LAN:8883` dengan TLS aktif dan
+  kredensial yang sama.
+- Port 8883 belum diekspos ke internet. Cloudflare Tunnel hanya mem-proxy HTTP/HTTPS
+  dan origin berada di belakang NAT; jangan arahkan gateway publik ke port ini sebelum
+  ada port-forward/UFW atau broker cloud.
+- Untuk mengganti password, hapus `mosquitto/.mqtt-password` dan `mosquitto/passwd`,
+  lalu jalankan `make mqtt-setup` lagi.
+
 Tes dan lint:
 
 ```bash
@@ -511,8 +575,11 @@ cargo fmt --check
 ├── docker-compose.yml
 ├── Makefile
 ├── .env.example
-├── mosquitto/mosquitto.conf
+├── mosquitto/
+│   ├── mosquitto.conf
+│   └── certs/            # dibuat oleh make mqtt-setup (gitignored)
 ├── nginx/panicbutton.localhost.conf  # Vhost lokal, proxy port 80 -> 18080
+├── scripts/mqtt-setup.sh # Generate sertifikat + kredensial MQTT TLS
 ├── src/
 │   ├── lib.rs            # Device registry, state panic, broadcast
 │   ├── store.rs          # Penyimpanan konfigurasi device (JSON)
@@ -529,20 +596,31 @@ cargo fmt --check
 
 ## Catatan Keamanan
 
-Mode ini sengaja dibuat publik: tanpa autentikasi, CORS `*`, dan broker MQTT anonim
-tanpa TLS. Cocok untuk demo/operasi internal, tetapi jangan dipakai untuk data sensitif
-di internet terbuka. Untuk produksi, tambahkan autentikasi, TLS, dan batasi topik broker.
+Mode ini sengaja dibuat publik: tanpa autentikasi pada dashboard/API dan CORS `*`.
+Listener MQTT `1883` tetap anonim dan hanya untuk jaringan internal/lokal; listener
+`8883` memakai TLS + username/password. Cocok untuk demo/operasi internal, tetapi
+jangan dipakai untuk data sensitif di internet terbuka. Untuk produksi, tambahkan
+autentikasi dashboard, TLS end-to-end, dan batasi topik broker dengan ACL.
 
 ## Troubleshooting
 
-- **Port 8080/1883 sudah dipakai**: jalankan dengan `SERVER_PORT=18080 MQTT_PORT=11883 docker compose up -d`.
+- **Port 8080/1883/8883 sudah dipakai**: jalankan dengan
+  `SERVER_PORT=18080 MQTT_PORT=11883 MQTT_TLS_PORT=18883 docker compose up -d`.
+- **Mosquitto gagal start / `Unable to open pwfile`**: jalankan `make mqtt-setup`
+  untuk membuat `mosquitto/passwd` dan sertifikat TLS.
+- **TLS ditolak `not authorised`**: username/password salah. Cek
+  `mosquitto/.mqtt-password`; untuk merotasi, hapus `mosquitto/passwd` dan
+  `mosquitto/.mqtt-password`, lalu jalankan `make mqtt-setup`.
+- **`certificate verify failed` saat tes lokal**: gunakan
+  `--cafile mosquitto/certs/server.crt` atau `--insecure` untuk tes cepat.
 - **`panicbutton.localhost` tidak resolve atau 502**: pastikan vhost nginx aktif
   (`make nginx`), container server sehat (`make ps`), dan `proxy_pass` di
   `nginx/panicbutton.localhost.conf` cocok dengan `SERVER_PORT` (default 18080).
   Browser modern dan systemd-resolved biasanya sudah memetakan `*.localhost` ke
   loopback; jika tidak, tambahkan `127.0.0.1 panicbutton.localhost` ke `/etc/hosts`.
 - **Device tidak muncul**: pastikan uplink + JSON MQTT aktif, topik cocok, region/channel
-  benar, dan firewall VPS membuka port 1883. Board nRF52 tidak mendukung JSON MQTT.
+  benar, dan firewall VPS membuka port MQTT (`1883`/`8883`). Board nRF52 tidak
+  mendukung JSON MQTT.
 - **Panic detection sensor tidak terdeteksi**: cek payload JSON dari
   `mosquitto_sub`; server menerima `state`, `detected`, atau menganggap detection
   sebagai panic jika field state tidak ada.

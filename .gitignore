@@ -1,2 +1,5 @@
 /target
 .env
+mosquitto/certs/
+mosquitto/passwd
+mosquitto/.mqtt-password

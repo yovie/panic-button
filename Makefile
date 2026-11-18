@@ -2,6 +2,9 @@ SHELL := /bin/bash
 
 SERVER_PORT ?= 18080
 MQTT_PORT ?= 1883
+DEV_DOMAIN ?= panicbutton.localhost
+
+DEV_URL := http://$(DEV_DOMAIN):$(SERVER_PORT)
 
 STAGING_HOST ?= devserver
 STAGING_DIR ?= panic-button-staging
@@ -20,8 +23,8 @@ help:
 	@echo "Panic Button"
 	@echo ""
 	@echo "  make deploy-dev   Build image lalu jalankan server + mosquitto + simulator"
-	@echo "                    Web UI : http://localhost:$(SERVER_PORT)"
-	@echo "                    MQTT   : localhost:$(MQTT_PORT) (anonim, publik)"
+	@echo "                    Web UI : $(DEV_URL)"
+	@echo "                    MQTT   : $(DEV_DOMAIN):$(MQTT_PORT) (anonim, publik)"
 	@echo "  make stop-dev     Hentikan semua service (volume broker disimpan)"
 	@echo "  make deploy-staging  Build lokal, kirim source + image ke $(STAGING_HOST), lalu deploy"
 	@echo "                    Web UI : http://$(STAGING_HOST):$(STAGING_PORT)"
@@ -36,7 +39,7 @@ help:
 	@echo "  make fmt          cargo fmt"
 	@echo "  make check        fmt + clippy + test"
 	@echo ""
-	@echo "Override port: make deploy-dev SERVER_PORT=8080 MQTT_PORT=1883"
+	@echo "Override: make deploy-dev SERVER_PORT=8080 MQTT_PORT=1883 DEV_DOMAIN=panicbutton.localhost"
 
 build:
 	docker compose build
@@ -46,8 +49,9 @@ deploy-dev: build
 	$(COMPOSE) --profile sim up -d --remove-orphans simulator
 	@echo ""
 	@echo "Panic Button aktif:"
-	@echo "  Web UI      : http://localhost:$(SERVER_PORT)"
-	@echo "  MQTT broker : localhost:$(MQTT_PORT) (anonim, publik)"
+	@echo "  Web UI      : $(DEV_URL)"
+	@echo "  Panduan     : $(DEV_URL)/panduan.html"
+	@echo "  MQTT broker : $(DEV_DOMAIN):$(MQTT_PORT) (anonim, publik)"
 	@echo "  Demo        : simulator auto-panic tiap 45 detik"
 	@echo "  Status      : make ps"
 	@echo "  Log         : make logs"

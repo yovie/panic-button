@@ -188,8 +188,8 @@ tidak menghapus data. Resource limit per service dijelaskan di bagian
 docker compose up --build -d
 ```
 
-Buka `http://<host>:8080`. Panduan setup device tersedia di
-`http://<host>:8080/panduan.html`.
+Buka `http://<host>:8080` (lokal: <http://panicbutton.localhost:8080>). Panduan setup
+device tersedia di `http://<host>:8080/panduan.html`.
 
 Demo dengan simulator (auto panic tiap 45 detik):
 
@@ -217,12 +217,23 @@ make deploy-dev
 ```
 
 Perintah ini build image, lalu menjalankan `mosquitto`, `server`, dan `simulator`
-secara background. Web UI tersedia di `http://localhost:18080` dan broker MQTT di
-`localhost:1883`. Port 18080 dipakai sebagai default karena port 8080 sudah dipakai
-service lain di mesin ini.
+secara background. Web UI tersedia di **<http://panicbutton.localhost:18080>**, panduan
+di <http://panicbutton.localhost:18080/panduan.html>, dan broker MQTT di
+`panicbutton.localhost:1883`. Port 18080 dipakai sebagai default karena port 80/8080
+sudah dipakai service lain di mesin ini.
+
+Domain `*.localhost` otomatis diarahkan ke loopback oleh browser dan systemd-resolved.
+Jika `panicbutton.localhost` tidak bisa di-resolve di mesin Anda, tambahkan sekali
+(butuh sudo):
 
 ```bash
+echo '127.0.0.1 panicbutton.localhost' | sudo tee -a /etc/hosts
+```
+
+```bash
+make deploy-dev                    # deploy dev di panicbutton.localhost:18080
 make deploy-dev SERVER_PORT=8080   # jika port 8080 bebas
+make deploy-dev DEV_DOMAIN=panicbutton.test   # ganti domain dev
 make ps                            # status container
 make logs                          # ikuti log
 make sim                           # simulator interaktif (p/r/q + Enter)
@@ -455,7 +466,8 @@ cargo run --bin server
 cargo run --bin simulator -- --mode http --devices 3 --auto-panic 10
 ```
 
-Server lokal default tidak menyalakan MQTT (`MQTT_ENABLED=false`). Untuk uji MQTT lokal:
+Server lokal dapat diakses di <http://panicbutton.localhost:8080>. Default tidak
+menyalakan MQTT (`MQTT_ENABLED=false`). Untuk uji MQTT lokal:
 
 ```bash
 docker compose up -d mosquitto
@@ -503,6 +515,9 @@ di internet terbuka. Untuk produksi, tambahkan autentikasi, TLS, dan batasi topi
 ## Troubleshooting
 
 - **Port 8080/1883 sudah dipakai**: jalankan dengan `SERVER_PORT=18080 MQTT_PORT=11883 docker compose up -d`.
+- **`panicbutton.localhost` tidak resolve**: browser modern dan systemd-resolved sudah
+  memetakan `*.localhost` ke loopback; jika tidak, tambahkan `127.0.0.1 panicbutton.localhost`
+  ke `/etc/hosts`. Untuk dev via Makefile gunakan port `18080` (`:8080` untuk `cargo run`).
 - **Device tidak muncul**: pastikan uplink + JSON MQTT aktif, topik cocok, region/channel
   benar, dan firewall VPS membuka port 1883. Board nRF52 tidak mendukung JSON MQTT.
 - **Panic detection sensor tidak terdeteksi**: cek payload JSON dari

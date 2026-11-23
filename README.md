@@ -51,7 +51,7 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
 | Komponen | Teknologi | Peran |
 |---|---|---|
 | `server` | Rust 2024, Axum 0.8, tokio | HTTP API, WebSocket, serve UI statis, subscriber MQTT |
-| `mosquitto` | Eclipse Mosquitto 2 | Broker MQTT: 1883 anonim (internal/lokal) dan 8883 TLS + auth (device eksternal) |
+| `mosquitto` | Eclipse Mosquitto 2 | Broker MQTT: 1883 anonim (internal/lokal), 8883 TLS + auth (device eksternal), 9001 WebSocket (MQTT over WS) |
 | `simulator` | Rust (binary yang sama) | Device palsu: bergerak di rute, memicu panic/resolve |
 | Browser | Leaflet 1.9, OpenStreetMap, vanilla JS | Peta live, marker, alert panic, suara, auto-reconnect, modal Kelola Device |
 | Gateway Meshtastic | ESP32 (T-Beam, Heltec, dll) | Menjembatani trafik LoRa mesh ke MQTT JSON |
@@ -463,6 +463,7 @@ memperbarui registry dan menyiarkan `update`/`removed` via WebSocket.
 | `SERVER_PORT` | `8080` | Port host container server (Makefile: 18080, diakses via nginx) |
 | `MQTT_PORT` | `1883` | Port host broker MQTT plaintext (lokal/Docker) |
 | `MQTT_TLS_PORT` | `8883` | Port host broker MQTT TLS + auth |
+| `MQTT_WS_PORT` | `9001` | Port host broker MQTT over WebSocket |
 | `RUST_LOG` | `info` | Level log server |
 | `MQTT_ENABLED` | `true` | Aktifkan subscriber Meshtastic |
 | `MQTT_URL` | `mqtt://mosquitto:1883` | URL broker |

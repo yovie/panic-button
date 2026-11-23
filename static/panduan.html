@@ -531,13 +531,15 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
 
         <div class="callout danger">
           <div>
-            <strong>MQTT publik belum reachable</strong>
-            Domain <code>panic-button.jokocloud.my.id</code> hanya mengekspos 443 untuk
-            HTTP/WebSocket. Broker staging membuka <code>8883</code> (TLS + auth) dan
-            <code>1883</code> (anonim, internal), tetapi keduanya belum diekspos ke
-            internet. Jangan mengarahkan gateway ke
-            <code>panic-button.jokocloud.my.id:8883</code> sebelum port dan firewall
-            disiapkan; untuk device di LAN, gunakan <code>IP-LAN:8883</code>.
+            <strong>MQTT TCP publik belum reachable; WebSocket tersedia dengan konfigurasi</strong>
+            Domain <code>panic-button.jokocloud.my.id</code> mengekspos 443 untuk
+            HTTP/WebSocket. Broker staging membuka <code>8883</code> (TLS + auth),
+            <code>1883</code> (anonim, internal), dan <code>9001</code> (MQTT over
+            WebSocket). Native TCP 8883/1883 belum diekspos ke internet. Listener
+            <code>9001</code> dapat dijangkau sebagai
+            <code>wss://panic-button.jokocloud.my.id/mqtt</code> setelah route
+            Cloudflare ke <code>http://mosquitto:9001</code> dibuat. Untuk device di LAN,
+            gunakan <code>IP-LAN:8883</code>.
           </div>
         </div>
 
@@ -565,13 +567,22 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
             bisa mencapai server, lalu arahkan MQTT server ke IP privat server. Gateway
             meneruskan trafik lewat HP.
           </li>
-          <li>
-            <strong>Buka port MQTT dengan firewall.</strong>
-            Utamakan port <code>8883</code> (TLS + auth) dan batasi sumber IP seketat
-            mungkin. Hindari mengekspos <code>1883</code> ke internet terbuka karena
-            trafiknya plaintext dan anonim; port itu hanya untuk jaringan internal.
-          </li>
-        </ol>
+           <li>
+             <strong>Buka port MQTT dengan firewall.</strong>
+             Utamakan port <code>8883</code> (TLS + auth) dan batasi sumber IP seketat
+             mungkin. Hindari mengekspos <code>1883</code> ke internet terbuka karena
+             trafiknya plaintext dan anonim; port itu hanya untuk jaringan internal.
+           </li>
+           <li>
+             <strong>MQTT over WebSocket (WSS) via Cloudflare.</strong>
+             Broker menyediakan listener <code>9001</code> dengan protokol WebSocket dan
+             autentikasi. Arahkan public hostname Cloudflare ke service
+             <code>http://mosquitto:9001</code>; edge Cloudflare menyediakan
+             <code>wss://</code>. Cocok untuk aplikasi Meshtastic yang mendukung URI
+             <code>wss://host/mqtt</code> (gunakan <em>MQTT Client Proxy</em>).
+             Node dengan Wi-Fi/Ethernet sendiri umumnya tetap memakai TCP.
+           </li>
+         </ol>
 
         <h3>Konfigurasi MQTT di gateway</h3>
         <div class="guide-table-wrap">
@@ -614,16 +625,36 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
                 <td><code>msh</code></td>
                 <td>Default; ubah hanya jika memakai pemisahan topik khusus.</td>
               </tr>
-              <tr>
-                <td>Region / Channel</td>
+           <tr>
+             <td>WebSocket (opsional)</td>
+             <td><code>wss://panic-button.jokocloud.my.id/mqtt</code></td>
+             <td>Hanya jika Cloudflare route ke listener <code>9001</code> aktif. Path Mosquitto fleksibel, tetapi gunakan <code>/mqtt</code> untuk konsistensi.</td>
+           </tr>
+           <tr>
+             <td>Region / Channel</td>
                 <td>mis. <code>ID</code> / <code>Panic</code></td>
                 <td>Menentukan topik yang dipublikasikan.</td>
               </tr>
             </tbody>
           </table>
-        </div>
+         </div>
 
-        <h3>Tes koneksi TLS</h3>
+         <h3>Setup aplikasi Meshtastic (MQTT over WebSocket)</h3>
+         <ol class="steps">
+           <li>Update aplikasi Meshtastic ke versi terbaru yang memakai MQTTastic client.</li>
+           <li>Buka <strong>Settings → Module config → MQTT</strong>, aktifkan MQTT.</li>
+           <li>Jika node tidak punya internet sendiri, aktifkan <strong>MQTT Client Proxy</strong> agar HP meneruskan trafik.</li>
+           <li>Isi Address dengan URI lengkap <code>wss://panic-button.jokocloud.my.id/mqtt</code>.</li>
+           <li>Isi username <code>meshtastic</code> dan password dari <code>mosquitto/.mqtt-password</code>.</li>
+           <li>Aktifkan uplink/downlink pada channel, lalu <strong>Save &amp; Send</strong>.</li>
+           <li>Pastikan Cloudflare memiliki route WSS ke listener <code>9001</code> sebelum koneksi diuji.</li>
+         </ol>
+         <p>
+           Catatan: node dengan Wi-Fi/Ethernet sendiri umumnya tetap memakai MQTT TCP
+           (<code>8883</code>), bukan WebSocket.
+         </p>
+
+         <h3>Tes koneksi TLS</h3>
         <div class="code-block">
           <div class="code-head">
             <span>bash — subscribe via TLS</span>

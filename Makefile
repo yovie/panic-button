@@ -3,6 +3,7 @@ SHELL := /bin/bash
 SERVER_PORT ?= 18080
 MQTT_PORT ?= 1883
 MQTT_TLS_PORT ?= 8883
+MQTT_WS_PORT ?= 9001
 DEV_DOMAIN ?= panicbutton.localhost
 
 DEV_URL ?= http://$(DEV_DOMAIN)
@@ -13,8 +14,9 @@ STAGING_PROJECT ?= panic-button-staging
 STAGING_PORT ?= 18080
 STAGING_MQTT_PORT ?= 1883
 STAGING_MQTT_TLS_PORT ?= 8883
+STAGING_MQTT_WS_PORT ?= 9001
 
-COMPOSE := SERVER_PORT=$(SERVER_PORT) MQTT_PORT=$(MQTT_PORT) MQTT_TLS_PORT=$(MQTT_TLS_PORT) docker compose
+COMPOSE := SERVER_PORT=$(SERVER_PORT) MQTT_PORT=$(MQTT_PORT) MQTT_TLS_PORT=$(MQTT_TLS_PORT) MQTT_WS_PORT=$(MQTT_WS_PORT) docker compose
 CARGO := $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
 
 .DEFAULT_GOAL := help
@@ -89,7 +91,7 @@ deploy-staging: build
 	ssh $(STAGING_HOST) 'cd "$(STAGING_DIR)" && chmod 644 mosquitto/passwd mosquitto/certs/server.key'
 	@echo "Kirim image ke $(STAGING_HOST) ..."
 	set -o pipefail; docker save panic-button-server:latest | ssh $(STAGING_HOST) 'docker load'
-	ssh $(STAGING_HOST) 'set -e; cd "$(STAGING_DIR)"; COMPOSE_PROJECT_NAME=$(STAGING_PROJECT) SERVER_PORT=$(STAGING_PORT) MQTT_PORT=$(STAGING_MQTT_PORT) MQTT_TLS_PORT=$(STAGING_MQTT_TLS_PORT) docker compose up -d --no-build --remove-orphans --wait mosquitto server'
+	ssh $(STAGING_HOST) 'set -e; cd "$(STAGING_DIR)"; COMPOSE_PROJECT_NAME=$(STAGING_PROJECT) SERVER_PORT=$(STAGING_PORT) MQTT_PORT=$(STAGING_MQTT_PORT) MQTT_TLS_PORT=$(STAGING_MQTT_TLS_PORT) MQTT_WS_PORT=$(STAGING_MQTT_WS_PORT) docker compose up -d --no-build --remove-orphans --wait mosquitto server'
 	@ssh $(STAGING_HOST) 'curl -fsS http://127.0.0.1:$(STAGING_PORT)/health'; echo
 	@echo ""
 	@echo "Staging aktif di $(STAGING_HOST):"

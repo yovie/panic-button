@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 
+pub mod adapters;
 pub mod mqtt;
 pub mod store;
 
@@ -28,6 +29,12 @@ pub enum Protocol {
     Http,
     Simulator,
     Teltonika,
+    OwnTracks,
+    OsmAnd,
+    Traccar,
+    Lorawan,
+    GenericMqtt,
+    GenericHttp,
     Other,
 }
 

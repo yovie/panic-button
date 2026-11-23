@@ -537,7 +537,7 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
             <code>1883</code> (anonim, internal), dan <code>9001</code> (MQTT over
             WebSocket). Native TCP 8883/1883 belum diekspos ke internet. Listener
             <code>9001</code> dapat dijangkau sebagai
-            <code>wss://panic-button.jokocloud.my.id/mqtt</code> setelah route
+            <code>wss://mqtt-panic-button.jokocloud.my.id</code> setelah route
             Cloudflare ke <code>http://mosquitto:9001</code> dibuat. Untuk device di LAN,
             gunakan <code>IP-LAN:8883</code>.
           </div>
@@ -1025,6 +1025,64 @@ cargo run --bin simulator -- \
         Panduan ini mengikuti implementasi repo <code>panic-button</code>.
         Kembali ke <a href="/">dashboard</a>.
       </p>
+      <section id="adapter" class="guide-section">
+        <h2>Adapter otomatis (WebSocket/HTTP)</h2>
+        <p>
+          Endpoint <code>GET/POST https://panic-button.jokocloud.my.id/api/ingest/auto</code>
+          dan subscriber MQTT universal otomatis mendeteksi format data dari aplikasi
+          atau device yang didukung. Tidak perlu memilih adapter manual.
+        </p>
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Sumber</th>
+                <th>Jalur</th>
+                <th>Format deteksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Meshtastic</td>
+                <td>MQTT WSS <code>wss://mqtt-panic-button.jokocloud.my.id</code></td>
+                <td>JSON Meshtastic: <code>type</code>, <code>from</code>, <code>payload.latitude_i</code></td>
+              </tr>
+              <tr>
+                <td>OwnTracks</td>
+                <td>MQTT atau HTTP auto</td>
+                <td><code>_type=location</code>, <code>lat</code>, <code>lon</code>, <code>tid</code></td>
+              </tr>
+              <tr>
+                <td>OsmAnd tracker</td>
+                <td>HTTP GET auto</td>
+                <td>Query <code>lat</code>, <code>lon</code>, <code>deviceid</code></td>
+              </tr>
+              <tr>
+                <td>Traccar client</td>
+                <td>HTTP GET/POST auto</td>
+                <td>Query/body <code>id</code>, <code>lat</code>, <code>lon</code></td>
+              </tr>
+              <tr>
+                <td>TTN / LoRaWAN</td>
+                <td>MQTT atau webhook auto</td>
+                <td><code>uplink_message.decoded_payload.latitude/longitude</code></td>
+              </tr>
+              <tr>
+                <td>Generic</td>
+                <td>MQTT atau HTTP auto</td>
+                <td><code>lat</code> + <code>lon</code> + <code>id/device_id/deviceid</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout info">
+          <div>
+            <strong>WebSocket broker</strong>
+            Gunakan <code>wss://mqtt-panic-button.jokocloud.my.id</code> (tanpa path).
+            Cloudflare harus merutekan hostname tersebut ke <code>http://localhost:9001</code>.
+          </div>
+        </div>
+      </section>
     </article>
   </main>
 

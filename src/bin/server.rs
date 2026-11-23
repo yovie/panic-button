@@ -7,9 +7,10 @@ use axum::{
     http::StatusCode,
     routing::{get, patch, post},
 };
+use panic_button::adapters::HttpAdapter;
 use panic_button::{
-    Device, DeviceConfig, DeviceType, IngestEvent, Protocol, Registry, ServerMessage, mqtt,
-    normalize_imei, store::DeviceStore, valid_device_id, valid_position,
+    Device, DeviceConfig, DeviceType, IngestEvent, Protocol, Registry, ServerMessage, adapters,
+    mqtt, normalize_imei, store::DeviceStore, valid_device_id, valid_position,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -23,6 +24,7 @@ use tracing_subscriber::EnvFilter;
 struct AppState {
     registry: Arc<Registry>,
     store: Arc<Mutex<DeviceStore>>,
+    http_adapters: Arc<Vec<Box<dyn HttpAdapter>>>,
 }
 
 #[tokio::main]
@@ -47,21 +49,25 @@ async fn main() -> anyhow::Result<()> {
     );
 
     if env_flag("MQTT_ENABLED", false) {
+        let panic_keywords: Vec<String> = env_or("PANIC_KEYWORD", "PANIC,SOS")
+            .split(',')
+            .map(str::trim)
+            .filter(|keyword| !keyword.is_empty())
+            .map(str::to_string)
+            .collect();
         let config = mqtt::MqttConfig {
             url: env_or("MQTT_URL", "mqtt://localhost:1883"),
-            topic: env_or("MQTT_TOPIC", "msh/+/2/json/+/#"),
-            panic_keywords: env_or("PANIC_KEYWORD", "PANIC,SOS")
-                .split(',')
-                .map(str::trim)
-                .filter(|keyword| !keyword.is_empty())
-                .map(str::to_string)
-                .collect(),
+            topic: env_or("MQTT_TOPIC", "#"),
+            panic_keywords: panic_keywords.clone(),
             client_id: format!("panic-button-{}", std::process::id()),
         };
         let mqtt_registry = registry.clone();
+        let mqtt_adapters = adapters::mqtt_adapters(panic_keywords);
         tokio::spawn(async move {
-            if let Err(error) = mqtt::run(mqtt_registry, config).await {
-                warn!(%error, "MQTT subscriber stopped");
+            if let Err(error) =
+                adapters::run_mqtt_universal(mqtt_registry, config, mqtt_adapters).await
+            {
+                warn!(%error, "MQTT adapter subscriber stopped");
             }
         });
     }
@@ -69,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         registry: registry.clone(),
         store: Arc::new(Mutex::new(store)),
+        http_adapters: Arc::new(adapters::http_adapters()),
     };
 
     let static_dir = env_or("STATIC_DIR", "static");
@@ -76,6 +83,10 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/ingest", post(ingest))
+        .route(
+            "/api/ingest/auto",
+            get(ingest_auto_get).post(ingest_auto_post),
+        )
         .route("/api/devices", get(list_devices).post(create_device))
         .route(
             "/api/devices/{id}",
@@ -106,7 +117,38 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
 
 async fn ingest(
     State(state): State<AppState>,
-    Json(mut event): Json<IngestEvent>,
+    Json(event): Json<IngestEvent>,
+) -> Result<Json<Device>, (StatusCode, String)> {
+    apply_ingested_event(&state, event).await
+}
+
+async fn ingest_auto_get(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Device>, (StatusCode, String)> {
+    let request = adapters::HttpRequest { query, body: None };
+    let event = adapters::detect_http(&request, &state.http_adapters)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "no adapter matched".to_string()))?;
+    apply_ingested_event(&state, event).await
+}
+
+async fn ingest_auto_post(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Result<Json<Device>, (StatusCode, String)> {
+    let request = adapters::HttpRequest {
+        query,
+        body: Some(body),
+    };
+    let event = adapters::detect_http(&request, &state.http_adapters)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "no adapter matched".to_string()))?;
+    apply_ingested_event(&state, event).await
+}
+
+async fn apply_ingested_event(
+    state: &AppState,
+    mut event: IngestEvent,
 ) -> Result<Json<Device>, (StatusCode, String)> {
     let mut id = event.device_id.trim().to_string();
     let serial = clean_serial(event.serial.take());

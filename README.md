@@ -358,6 +358,7 @@ bisa publish. Jika memakai broker Meshtastic publik (`mqtt.meshtastic.org`), gan
 | Method | Path | Keterangan |
 |---|---|---|
 | POST | `/api/ingest` | Kirim event device (JSON) |
+| GET/POST | `/api/ingest/auto` | Auto-detect format tracker (OwnTracks, OsmAnd, Traccar, TTN, Generic) |
 | GET | `/api/devices` | Snapshot semua device (live + terdaftar) |
 | POST | `/api/devices` | Registrasi device baru; `id` opsional untuk non-Meshtastic jika IMEI diisi (`409` jika ID/IMEI sudah ada) |
 | PATCH | `/api/devices/{id}` | Update label/tipe/protokol/metadata/posisi awal |
@@ -467,7 +468,7 @@ memperbarui registry dan menyiarkan `update`/`removed` via WebSocket.
 | `RUST_LOG` | `info` | Level log server |
 | `MQTT_ENABLED` | `true` | Aktifkan subscriber Meshtastic |
 | `MQTT_URL` | `mqtt://mosquitto:1883` | URL broker |
-| `MQTT_TOPIC` | `msh/+/2/json/+/#` | Topik langganan |
+| `MQTT_TOPIC` | `#` | Topik langganan (universal adapter) |
 | `PANIC_KEYWORD` | `PANIC,SOS` | Keyword teks pemicu panic |
 | `DEVICES_FILE` | `data/devices.json` | Lokasi penyimpanan konfigurasi device |
 

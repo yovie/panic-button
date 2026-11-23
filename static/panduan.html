@@ -29,6 +29,7 @@
         <a href="#tipe">Tipe device</a>
         <a href="#identitas">Identitas device</a>
         <a href="#http">HTTP / device kustom</a>
+        <a href="#adapter">Adapter otomatis</a>
         <a href="#panic">Panic &amp; resolve</a>
         <a href="#registrasi">Registrasi device</a>
         <a href="#websocket">WebSocket</a>
@@ -219,7 +220,17 @@
         <p>
           Semua perangkat yang bisa mengirim HTTP JSON dapat memakai satu endpoint yang sama:
           <code>POST https://panic-button.jokocloud.my.id/api/ingest</code>.
+          Untuk format tracker umum, gunakan auto-detect
+          <code>GET/POST https://panic-button.jokocloud.my.id/api/ingest/auto</code>.
         </p>
+        <div class="callout info">
+          <div>
+            <strong>Adapter otomatis</strong>
+            Endpoint auto mendeteksi OwnTracks, OsmAnd, Traccar, TTN/LoRaWAN, dan Generic
+            berdasarkan field atau query yang dikirim. Device auto-created bersifat live
+            (tidak disimpan ke <code>devices.json</code>).
+          </div>
+        </div>
 
         <h3>Field request</h3>
         <div class="guide-table-wrap">
@@ -627,7 +638,7 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
               </tr>
            <tr>
              <td>WebSocket (opsional)</td>
-             <td><code>wss://panic-button.jokocloud.my.id/mqtt</code></td>
+             <td><code>wss://mqtt-panic-button.jokocloud.my.id</code></td>
              <td>Hanya jika Cloudflare route ke listener <code>9001</code> aktif. Path Mosquitto fleksibel, tetapi gunakan <code>/mqtt</code> untuk konsistensi.</td>
            </tr>
            <tr>
@@ -644,7 +655,7 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
            <li>Update aplikasi Meshtastic ke versi terbaru yang memakai MQTTastic client.</li>
            <li>Buka <strong>Settings → Module config → MQTT</strong>, aktifkan MQTT.</li>
            <li>Jika node tidak punya internet sendiri, aktifkan <strong>MQTT Client Proxy</strong> agar HP meneruskan trafik.</li>
-           <li>Isi Address dengan URI lengkap <code>wss://panic-button.jokocloud.my.id/mqtt</code>.</li>
+           <li>Isi Address dengan URI lengkap <code>wss://mqtt-panic-button.jokocloud.my.id</code>.</li>
            <li>Isi username <code>meshtastic</code> dan password dari <code>mosquitto/.mqtt-password</code>.</li>
            <li>Aktifkan uplink/downlink pada channel, lalu <strong>Save &amp; Send</strong>.</li>
            <li>Pastikan Cloudflare memiliki route WSS ke listener <code>9001</code> sebelum koneksi diuji.</li>
@@ -880,10 +891,15 @@ cargo run --bin simulator -- \
               </tr>
             </thead>
             <tbody>
-              <tr>
+               <tr>
                 <td><code>POST</code></td>
                 <td><code>/api/ingest</code></td>
                 <td>Kirim posisi, telemetry, panic, atau panic clear dari device.</td>
+              </tr>
+              <tr>
+                <td><code>GET/POST</code></td>
+                <td><code>/api/ingest/auto</code></td>
+                <td>Auto-detect format tracker (OwnTracks, OsmAnd, Traccar, TTN, Generic).</td>
               </tr>
               <tr>
                 <td><code>GET</code></td>
@@ -1015,7 +1031,7 @@ cargo run --bin simulator -- \
         <ul>
           <li>Jangan gunakan untuk data sensitif tanpa menambahkan autentikasi dan otorisasi.</li>
           <li>Batasi akses API di reverse proxy/firewall, minimal untuk operasi tulis.</li>
-          <li>Jangan membuka MQTT 1883 ke internet terbuka; gunakan 8883 (TLS + auth), VPN, atau ACL.</li>
+          <li>Jangan membuka MQTT 1883 ke internet terbuka; gunakan 8883 (TLS + auth), WSS <code>mqtt-panic-button.jokocloud.my.id</code>, VPN, atau ACL.</li>
           <li>JSON MQTT tidak dienkripsi end-to-end; pada listener 1883 payload juga plaintext di jaringan. Siapa pun yang memegang kredensial 8883 dan akses broker dapat membaca pesan panic dan posisi.</li>
           <li>Server masih berlangganan ke broker lewat 1883 di jaringan Docker. Untuk produksi, pertimbangkan <code>mqtts://</code> untuk subscriber, API auth, dan pencatatan audit.</li>
         </ul>

@@ -17,6 +17,8 @@
     other: 'Lainnya',
   };
 
+  const STALE_AFTER_MS = 60 * 60 * 1000;
+
   const METADATA_KEYS = [
     'name',
     'label',
@@ -55,6 +57,19 @@
     manageSearch: document.getElementById('manage-search'),
     manageNew: document.getElementById('manage-new'),
     manageDevices: document.getElementById('manage-devices'),
+    rawBtn: document.getElementById('raw-btn'),
+    rawBadge: document.getElementById('raw-badge'),
+    rawOverlay: document.getElementById('raw-overlay'),
+    rawClose: document.getElementById('raw-close'),
+    rawSearch: document.getElementById('raw-search'),
+    rawClearAll: document.getElementById('raw-clear-all'),
+    rawDeviceCount: document.getElementById('raw-device-count'),
+    rawDeviceList: document.getElementById('raw-device-list'),
+    rawSelected: document.getElementById('raw-selected'),
+    rawSelectedMeta: document.getElementById('raw-selected-meta'),
+    rawRefresh: document.getElementById('raw-refresh'),
+    rawClearDevice: document.getElementById('raw-clear-device'),
+    rawPayloadList: document.getElementById('raw-payload-list'),
     deviceForm: document.getElementById('device-form'),
     formError: document.getElementById('form-error'),
     formSubmit: document.getElementById('form-submit'),
@@ -78,6 +93,7 @@
 
   const devices = new Map();
   const markers = new Map();
+  const markerStates = new Map();
 
   const state = {
     ws: null,
@@ -91,6 +107,9 @@
     alarmTimer: null,
     editingId: null,
     manageDevices: [],
+    rawDevices: [],
+    rawSelectedKey: null,
+    rawPayloads: [],
   };
 
   function escapeHtml(value) {
@@ -124,6 +143,17 @@
     return device.id;
   }
 
+  function isStale(device) {
+    if (!device.last_seen) return true;
+    const timestamp = new Date(device.last_seen).getTime();
+    return Number.isNaN(timestamp) || Date.now() - timestamp > STALE_AFTER_MS;
+  }
+
+  function markerState(device) {
+    if (device.status === 'panic') return 'panic';
+    return isStale(device) ? 'stale' : 'normal';
+  }
+
   function isPositioned(device) {
     return typeof device.lat === 'number' && typeof device.lon === 'number';
   }
@@ -151,10 +181,11 @@
   }
 
   function buildIcon(device) {
-    const panic = device.status === 'panic';
+    const state = markerState(device);
+    const extraClass = state === 'normal' ? '' : ` ${state}`;
     return L.divIcon({
       className: 'device-marker-wrap',
-      html: `<div class="device-marker${panic ? ' panic' : ''}"><span class="dot"></span><span class="label">${escapeHtml(displayName(device))}</span></div>`,
+      html: `<div class="device-marker${extraClass}"><span class="dot"></span><span class="label">${escapeHtml(displayName(device))}</span></div>`,
       iconSize: [180, 24],
       iconAnchor: [7, 12],
     });
@@ -165,6 +196,18 @@
     if (marker) {
       marker.remove();
       markers.delete(id);
+    }
+    markerStates.delete(id);
+  }
+
+  function refreshMarkerStates() {
+    for (const [id, marker] of markers) {
+      const device = devices.get(id);
+      if (!device) continue;
+      const next = markerState(device);
+      if (markerStates.get(id) === next) continue;
+      marker.setIcon(buildIcon(device));
+      markerStates.set(id, next);
     }
   }
 
@@ -198,6 +241,7 @@
         marker.setLatLng(latlng);
         marker.setIcon(buildIcon(device));
       }
+      markerStates.set(device.id, markerState(device));
     } else {
       removeMarker(device.id);
     }
@@ -285,6 +329,7 @@
 
   function renderDeviceItem(device) {
     const panic = device.status === 'panic';
+    const stale = !panic && isStale(device);
     const positioned = isPositioned(device);
     const meta = [];
 
@@ -312,7 +357,7 @@
       meta.push('<span>lokasi belum ada</span>');
     }
 
-    return `<li class="device${panic ? ' panic' : ''}" data-id="${escapeHtml(device.id)}">
+    return `<li class="device${panic ? ' panic' : ''}${stale ? ' stale' : ''}" data-id="${escapeHtml(device.id)}">
       <div class="device-top">
         <span class="status-dot"></span>
         <div class="device-name">${escapeHtml(displayName(device))}<span class="device-id">${escapeHtml(device.id)}</span></div>
@@ -530,8 +575,9 @@
     els.manageDevices.innerHTML = list
       .map((device) => {
         const panic = device.status === 'panic';
+        const stale = !panic && isStale(device);
         const active = device.id === state.editingId ? ' active' : '';
-        return `<li class="manage-item${panic ? ' panic' : ''}${active}" data-id="${escapeHtml(device.id)}">
+        return `<li class="manage-item${panic ? ' panic' : ''}${stale ? ' stale' : ''}${active}" data-id="${escapeHtml(device.id)}">
           <div class="manage-item-name">
             <span class="status-dot"></span>
             <span>${escapeHtml(displayName(device))}</span>
@@ -575,6 +621,136 @@
 
   function closeManage() {
     els.manageOverlay.classList.add('hidden');
+  }
+
+  function rawTotal() {
+    return state.rawDevices.reduce((sum, device) => sum + device.count, 0);
+  }
+
+  function updateRawBadge() {
+    const total = rawTotal();
+    els.rawBadge.textContent = String(total);
+    els.rawBadge.classList.toggle('hidden', total === 0);
+  }
+
+  function renderRawList() {
+    const query = els.rawSearch.value.trim().toLowerCase();
+    const list = state.rawDevices.filter((device) => {
+      if (!query) return true;
+      return (
+        device.key.toLowerCase().includes(query) ||
+        device.reasons.some((reason) => reason.toLowerCase().includes(query)) ||
+        device.sources.some((source) => source.toLowerCase().includes(query))
+      );
+    });
+
+    if (!list.length) {
+      els.rawDeviceList.innerHTML = '<li class="empty">Belum ada payload yang tercatat.</li>';
+      return;
+    }
+
+    els.rawDeviceList.innerHTML = list
+      .map(
+        (device) => `<li class="raw-device${device.key === state.rawSelectedKey ? ' active' : ''}" data-key="${escapeHtml(device.key)}">
+          <div class="raw-device-top">
+            <strong>${escapeHtml(device.key)}</strong>
+            <span class="chip">${device.count}</span>
+          </div>
+          <div class="raw-device-meta">
+            <span>${relativeTime(device.last_seen)}</span>
+            ${device.sources.map((source) => `<span class="tag">${escapeHtml(source)}</span>`).join('')}
+            ${device.reasons.slice(0, 2).map((reason) => `<span class="tag raw-reason">${escapeHtml(reason)}</span>`).join('')}
+          </div>
+        </li>`,
+      )
+      .join('');
+  }
+
+  function renderRawHistory() {
+    if (!state.rawPayloads.length) {
+      els.rawPayloadList.innerHTML = '<li class="empty">Tidak ada payload untuk device ini.</li>';
+      return;
+    }
+
+    els.rawPayloadList.innerHTML = state.rawPayloads
+      .map((item) => {
+        const text = item.payload_text ?? item.payload_b64;
+        return `<li class="raw-payload" data-id="${escapeHtml(item.id)}">
+          <div class="raw-payload-head">
+            <span>${escapeHtml(relativeTime(item.received_at))}</span>
+            <span class="tag">${escapeHtml(item.source)}</span>
+            <span class="tag raw-reason">${escapeHtml(item.reason)}</span>
+            <span>${escapeHtml(item.topic)}</span>
+            <button class="btn ghost raw-copy" type="button" data-copy="${escapeHtml(item.id)}">Salin</button>
+          </div>
+          <pre class="raw-payload-body">${escapeHtml(text)}${item.truncated ? ' … (dipotong)' : ''}</pre>
+        </li>`;
+      })
+      .join('');
+  }
+
+  async function refreshRawHistory() {
+    const key = state.rawSelectedKey;
+    if (!key) {
+      els.rawSelected.textContent = 'Pilih device';
+      els.rawSelectedMeta.textContent = '';
+      els.rawPayloadList.innerHTML = '<li class="empty">Pilih device di daftar sebelah kiri.</li>';
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/unmatched/payloads?key=${encodeURIComponent(key)}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const list = await response.json();
+      state.rawPayloads = Array.isArray(list) ? list : [];
+      const device = state.rawDevices.find((item) => item.key === key);
+      els.rawSelected.textContent = key;
+      els.rawSelectedMeta.textContent = device
+        ? `${device.count} payload · terakhir ${relativeTime(device.last_seen)}`
+        : `${state.rawPayloads.length} payload`;
+      renderRawHistory();
+    } catch (error) {
+      console.error('Gagal memuat history payload', error);
+    }
+  }
+
+  async function refreshRawList(options = {}) {
+    try {
+      const response = await fetch('/api/unmatched');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const list = await response.json();
+      state.rawDevices = Array.isArray(list) ? list : [];
+      updateRawBadge();
+      els.rawDeviceCount.textContent = `${state.rawDevices.length} device`;
+      renderRawList();
+
+      if (options.selectFirst && !state.rawSelectedKey && state.rawDevices.length) {
+        state.rawSelectedKey = state.rawDevices[0].key;
+        renderRawList();
+      }
+      await refreshRawHistory();
+    } catch (error) {
+      console.error('Gagal memuat data mentah', error);
+    }
+  }
+
+  async function selectRawDevice(key) {
+    state.rawSelectedKey = key;
+    renderRawList();
+    await refreshRawHistory();
+  }
+
+  async function openRaw() {
+    els.rawOverlay.classList.remove('hidden');
+    els.rawSearch.value = '';
+    state.rawSelectedKey = null;
+    state.rawPayloads = [];
+    await refreshRawList({ selectFirst: true });
+    els.rawSearch.focus();
+  }
+
+  function closeRaw() {
+    els.rawOverlay.classList.add('hidden');
   }
 
   function collectFormPayload() {
@@ -728,6 +904,12 @@
       case 'removed':
         if (message.id) removeDevice(message.id);
         break;
+      case 'raw_captured':
+        updateRawBadge();
+        if (!els.rawOverlay.classList.contains('hidden')) {
+          refreshRawList().catch(() => {});
+        }
+        break;
       default:
         break;
     }
@@ -832,20 +1014,66 @@
     els.fields.id.focus();
   });
 
-  window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !els.manageOverlay.classList.contains('hidden')) {
-      closeManage();
+  els.rawBtn.addEventListener('click', () => openRaw());
+  els.rawClose.addEventListener('click', closeRaw);
+  els.rawRefresh.addEventListener('click', () => refreshRawList());
+  els.rawSearch.addEventListener('input', renderRawList);
+  els.rawDeviceList.addEventListener('click', (event) => {
+    const item = event.target.closest('li[data-key]');
+    if (item) selectRawDevice(item.dataset.key);
+  });
+  els.rawPayloadList.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-copy]');
+    if (!button) return;
+    const item = state.rawPayloads.find((payload) => payload.id === button.dataset.copy);
+    if (!item) return;
+    try {
+      await navigator.clipboard.writeText(item.payload_text ?? item.payload_b64);
+      button.textContent = 'Tersalin';
+      setTimeout(() => {
+        button.textContent = 'Salin';
+      }, 1200);
+    } catch (error) {
+      console.error('Gagal menyalin payload', error);
     }
+  });
+  els.rawClearAll.addEventListener('click', async () => {
+    if (!window.confirm('Hapus semua payload mentah?')) return;
+    await fetch('/api/unmatched', { method: 'DELETE' });
+    state.rawSelectedKey = null;
+    state.rawPayloads = [];
+    await refreshRawList();
+  });
+  els.rawClearDevice.addEventListener('click', async () => {
+    const key = state.rawSelectedKey;
+    if (!key || !window.confirm(`Hapus semua payload dari ${key}?`)) return;
+    await fetch(`/api/unmatched?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
+    state.rawSelectedKey = null;
+    state.rawPayloads = [];
+    await refreshRawList();
+  });
+  els.rawOverlay.addEventListener('click', (event) => {
+    if (event.target === els.rawOverlay) closeRaw();
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (!els.manageOverlay.classList.contains('hidden')) closeManage();
+    else if (!els.rawOverlay.classList.contains('hidden')) closeRaw();
   });
 
   setInterval(() => {
+    refreshMarkerStates();
     renderSidebar();
     updateAlert();
+    if (!els.manageOverlay.classList.contains('hidden')) renderManageList();
+    if (!els.rawOverlay.classList.contains('hidden')) refreshRawList().catch(() => {});
   }, 5000);
 
   renderSidebar();
   updateAlert();
   updateSoundButton();
   updateIdHint();
+  refreshRawList().catch(() => {});
   connect();
 })();

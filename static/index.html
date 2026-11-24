@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f7f9fc">
   <title>Panic Button — Live Tracking</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20261118">
+  <link rel="stylesheet" href="/style.css?v=20261124b">
 </head>
 <body>
   <header class="topbar">
@@ -19,6 +19,7 @@
     </div>
     <div class="topbar-actions">
       <a class="btn ghost" href="/panduan.html">Panduan</a>
+      <button id="raw-btn" class="btn ghost" type="button">Data Mentah <span id="raw-badge" class="chip hidden">0</span></button>
       <button id="manage-btn" class="btn" type="button">Kelola Device</button>
       <button id="sound-btn" class="btn ghost" type="button">Suara: OFF</button>
       <div id="conn" class="conn offline">
@@ -130,7 +131,42 @@
     </div>
   </div>
 
+  <div id="raw-overlay" class="overlay hidden">
+    <div class="modal raw-modal" role="dialog" aria-modal="true" aria-labelledby="raw-title">
+      <header class="modal-head">
+        <div>
+          <h2 id="raw-title">Data Mentah</h2>
+          <p>Payload yang belum cocok dengan adapter atau gagal diproses</p>
+        </div>
+        <button id="raw-close" class="btn ghost" type="button">Tutup</button>
+      </header>
+      <div class="modal-body raw-body">
+        <section class="raw-devices">
+          <div class="manage-list-head">
+            <input id="raw-search" type="search" placeholder="Cari device / alasan..." autocomplete="off">
+            <button id="raw-clear-all" class="btn ghost danger-text" type="button">Hapus semua</button>
+          </div>
+          <div id="raw-device-count" class="raw-count">0 device</div>
+          <ul id="raw-device-list" class="raw-device-list"></ul>
+        </section>
+        <section class="raw-history">
+          <div class="raw-history-head">
+            <div>
+              <strong id="raw-selected">Pilih device</strong>
+              <span id="raw-selected-meta"></span>
+            </div>
+            <div class="raw-history-actions">
+              <button id="raw-refresh" class="btn ghost" type="button">Refresh</button>
+              <button id="raw-clear-device" class="btn ghost danger-text" type="button">Hapus device</button>
+            </div>
+          </div>
+          <ul id="raw-payload-list" class="raw-payload-list"></ul>
+        </section>
+      </div>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=20261124b"></script>
 </body>
 </html>

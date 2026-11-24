@@ -1,6 +1,7 @@
 use crate::{
-    DeviceType, EventKind, IngestEvent, Protocol, Registry, normalize_imei, valid_device_id,
-    valid_position,
+    DeviceType, EventKind, IngestEvent, Protocol, Registry, normalize_imei,
+    raw_capture::{CaptureSource, RawCaptureStore},
+    valid_device_id, valid_position,
 };
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde_json::Value;
@@ -36,9 +37,23 @@ pub async fn apply_actions(registry: &Registry, actions: Vec<AdapterAction>) {
     }
 }
 
+#[derive(Debug)]
+pub enum DetectOutcome {
+    NoMatch,
+    Handled(Vec<AdapterAction>),
+    Skipped { reason: &'static str },
+}
+
 pub trait MqttAdapter: Send + Sync {
     fn name(&self) -> &'static str;
     fn detect(&self, topic: &str, payload: &[u8]) -> Option<Vec<AdapterAction>>;
+
+    fn detect_outcome(&self, topic: &str, payload: &[u8]) -> DetectOutcome {
+        match self.detect(topic, payload) {
+            Some(actions) => DetectOutcome::Handled(actions),
+            None => DetectOutcome::NoMatch,
+        }
+    }
 }
 
 pub trait HttpAdapter: Send + Sync {
@@ -720,11 +735,14 @@ pub async fn run_mqtt_universal(
     registry: Arc<Registry>,
     config: crate::mqtt::MqttConfig,
     adapters: Vec<Box<dyn MqttAdapter>>,
+    raw: Arc<RawCaptureStore>,
 ) -> anyhow::Result<()> {
     let broker = crate::mqtt::parse_broker_url(&config.url)?;
 
     loop {
-        if let Err(error) = connect_and_poll(registry.clone(), &config, &broker, &adapters).await {
+        if let Err(error) =
+            connect_and_poll(registry.clone(), &config, &broker, &adapters, &raw).await
+        {
             warn!(%error, "MQTT adapter subscriber lost connection, reconnecting in 5s");
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -736,6 +754,7 @@ async fn connect_and_poll(
     config: &crate::mqtt::MqttConfig,
     broker: &crate::mqtt::BrokerAddress,
     adapters: &[Box<dyn MqttAdapter>],
+    raw: &RawCaptureStore,
 ) -> anyhow::Result<()> {
     let mut options = MqttOptions::new(&config.client_id, &broker.host, broker.port);
     options.set_keep_alive(Duration::from_secs(30));
@@ -764,33 +783,58 @@ async fn connect_and_poll(
                 info!(topic = %config.topic, "subscribed universal MQTT adapter topic");
             }
             Ok(Event::Incoming(Packet::Publish(publish))) => {
-                let mut handled = false;
+                let mut applied = false;
+                let mut reason: Option<&'static str> = None;
                 for adapter in adapters {
-                    if let Some(actions) = adapter.detect(&publish.topic, &publish.payload) {
-                        let has_actions = !actions.is_empty();
-                        apply_actions(&registry, actions).await;
-                        if has_actions {
-                            info!(adapter = adapter.name(), topic = %publish.topic, "MQTT adapter matched");
-                        } else {
-                            debug!(
-                                adapter = adapter.name(),
-                                topic = %publish.topic,
-                                "MQTT adapter handled message without actions"
-                            );
+                    match adapter.detect_outcome(&publish.topic, &publish.payload) {
+                        DetectOutcome::Handled(actions) => {
+                            let has_actions = !actions.is_empty();
+                            apply_actions(&registry, actions).await;
+                            if has_actions {
+                                info!(adapter = adapter.name(), topic = %publish.topic, "MQTT adapter matched");
+                            } else {
+                                debug!(
+                                    adapter = adapter.name(),
+                                    topic = %publish.topic,
+                                    "MQTT adapter handled message without actions"
+                                );
+                            }
+                            applied = true;
+                            break;
                         }
-                        handled = true;
-                        break;
+                        DetectOutcome::Skipped { reason: skipped } => {
+                            reason = Some(skipped);
+                            applied = true;
+                            break;
+                        }
+                        DetectOutcome::NoMatch => {}
                     }
                 }
-                if !handled
-                    && should_log(&mut unmatched_log, &publish.topic, Duration::from_secs(60))
-                {
-                    warn!(
-                        topic = %publish.topic,
-                        len = publish.payload.len(),
-                        preview = %payload_preview(&publish.payload),
-                        "unsupported MQTT message: no adapter matched"
-                    );
+
+                if !applied {
+                    reason = Some("no_adapter");
+                }
+
+                if let Some(reason) = reason {
+                    let captured = raw
+                        .record(
+                            CaptureSource::Mqtt,
+                            &publish.topic,
+                            reason,
+                            &publish.payload,
+                        )
+                        .await;
+                    registry.notify_raw(captured.device_key, raw.count().await);
+
+                    if should_log(&mut unmatched_log, &publish.topic, Duration::from_secs(60)) {
+                        warn!(
+                            topic = %publish.topic,
+                            len = publish.payload.len(),
+                            reason = reason,
+                            preview = %payload_preview(&publish.payload),
+                            "unsupported MQTT message captured"
+                        );
+                    }
                 }
             }
             Ok(_) => {}

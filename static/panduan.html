@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f7f9fc">
   <title>Panduan Setup Device — Panic Button</title>
-  <link rel="stylesheet" href="/style.css?v=20261118">
+  <link rel="stylesheet" href="/style.css?v=20261124b">
 </head>
 <body class="guide-page">
   <header class="topbar">
@@ -33,6 +33,7 @@
         <a href="#panic">Panic &amp; resolve</a>
         <a href="#registrasi">Registrasi device</a>
         <a href="#websocket">WebSocket</a>
+        <a href="#raw">Payload belum didukung</a>
         <a href="#meshtastic">Meshtastic (MQTT)</a>
         <a href="#simulator">Simulator</a>
         <a href="#teltonika">Teltonika</a>
@@ -50,6 +51,12 @@
           Semua sumber data — Meshtastic, HTTP, simulator, maupun gateway lain — bermuara
           ke satu registry yang sama. Panduan ini menjelaskan data apa yang harus dikirim,
           ke endpoint atau topik mana, dan aturan identitas tiap tipe device.
+        </p>
+        <p>
+          Di dashboard, titik <strong>merah berkedip</strong> berarti panic,
+          <strong>merah statis</strong> berarti device tidak mengirim data lebih dari
+          1 jam (termasuk yang belum pernah kirim data), sedangkan titik biru/hijau
+          berarti device aktif.
         </p>
         <div class="guide-base">
           <span>Base URL</span>
@@ -523,6 +530,11 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
                 <td><code>id</code></td>
                 <td>Device dihapus lewat API/UI.</td>
               </tr>
+              <tr>
+                <td><code>raw_captured</code></td>
+                <td><code>device_key</code>, <code>count</code></td>
+                <td>Ada payload baru yang belum didukung.</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -534,6 +546,52 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
             header <code>Upgrade</code> dan <code>Connection</code>. Tanpa itu, dashboard
             tampil tetapi status koneksi tetap <em>Offline</em>.
           </div>
+        </div>
+      </section>
+
+      <section id="raw" class="guide-section">
+        <h2>Payload belum didukung</h2>
+        <p>
+          Klik <strong>Data Mentah</strong> di dashboard untuk melihat payload MQTT atau
+          <code>/api/ingest/auto</code> yang tidak cocok dengan adapter, atau gagal diproses
+          (misalnya paket protobuf Meshtastic yang tidak bisa didekripsi). Payload
+          dikelompokkan per device berdasarkan ID pada topik/body, dengan fallback ke topik.
+          Riwayat disimpan di <code>data/unmatched.json</code> maksimal 500 entri, 50 per
+          device, 8 KB per payload, dan 7 hari.
+        </p>
+        <p>
+          Kunci sensitif seperti <code>password</code>, <code>token</code>, dan
+          <code>authorization</code> diganti <code>***</code> sebelum disimpan. Payload
+          biner ditampilkan dalam base64.
+        </p>
+
+        <div class="guide-table-wrap">
+          <table class="guide-table">
+            <thead>
+              <tr>
+                <th>Method</th>
+                <th>Path</th>
+                <th>Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>GET</code></td>
+                <td><code>/api/unmatched</code></td>
+                <td>Daftar device beserta jumlah payload.</td>
+              </tr>
+              <tr>
+                <td><code>GET</code></td>
+                <td><code>/api/unmatched/payloads?key=...</code></td>
+                <td>Riwayat payload satu device, terbaru dulu.</td>
+              </tr>
+              <tr>
+                <td><code>DELETE</code></td>
+                <td><code>/api/unmatched?key=...</code></td>
+                <td>Hapus riwayat satu device; tanpa <code>key</code> hapus semua.</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 

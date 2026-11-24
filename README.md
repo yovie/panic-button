@@ -10,6 +10,8 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
 - Panduan setup device per tipe/protokol di `/panduan.html`: endpoint HTTP, topik MQTT,
   registrasi, panic/resolve, simulator, dan status dukungan Teltonika.
 - Alert panic realtime: marker merah berkedip, banner, auto-pan ke lokasi, dan suara.
+- Indikator device: merah berkedip = panic, merah statis = tidak kirim data lebih dari
+  1 jam (termasuk yang belum pernah kirim), biru/hijau = aktif.
 - Daftar device dengan status, kecepatan, baterai, dan waktu terakhir terlihat.
 - Menu **Kelola Device**: registrasi device, label, tipe, protokol, serial/IMEI, pemilik,
   tag, catatan, dan posisi awal opsional. Konfigurasi tersimpan di JSON dan bertahan
@@ -20,6 +22,9 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
   detection_sensor, text/alert keyword), termasuk listener TLS 8883 dengan
   username/password untuk development.
 - Ingest HTTP generik untuk perangkat lain/simulator.
+- Menu **Data Mentah**: mencatat payload MQTT/HTTP yang tidak cocok dengan adapter atau
+  gagal diproses (decode/dekripsi), dikelompokkan per device dengan history payload,
+  tersimpan di `data/unmatched.json` dengan batas 500 entri / 50 per device / 8 KB / 7 hari.
 - Simulator dua mode (HTTP dan Meshtastic MQTT) untuk demo tanpa hardware.
 - Mode publik: tanpa login dan CORS terbuka; broker MQTT `1883` anonim untuk lokal,
   `8883` TLS + auth untuk device eksternal.
@@ -400,6 +405,9 @@ sesuai aturan firmware Meshtastic.
 | DELETE | `/api/devices/{id}` | Hapus device dari registry dan penyimpanan |
 | POST | `/api/devices/{id}/panic` | Tandai device panic (lokasi terakhir) |
 | POST | `/api/devices/{id}/resolve` | Selesaikan panic |
+| GET | `/api/unmatched` | Daftar device dengan payload yang belum didukung |
+| GET | `/api/unmatched/payloads?key=...` | History payload untuk satu device (terbaru dulu) |
+| DELETE | `/api/unmatched?key=...` | Hapus history satu device; tanpa `key` menghapus semua |
 | GET | `/ws` | WebSocket realtime |
 | GET | `/health` | Health check + jumlah device |
 
@@ -507,6 +515,11 @@ memperbarui registry dan menyiarkan `update`/`removed` via WebSocket.
 | `PANIC_KEYWORD` | `PANIC,SOS` | Keyword teks pemicu panic |
 | `MESHTASTIC_PSK` | `AQ==` | PSK channel protobuf, base64; pisahkan dengan koma untuk beberapa channel |
 | `DEVICES_FILE` | `data/devices.json` | Lokasi penyimpanan konfigurasi device |
+| `UNMATCHED_FILE` | `data/unmatched.json` | File history payload yang belum didukung |
+| `UNMATCHED_MAX` | `500` | Maksimum total payload yang disimpan |
+| `UNMATCHED_PER_DEVICE` | `50` | Maksimum payload per device |
+| `UNMATCHED_MAX_BYTES` | `8192` | Ukuran payload mentah sebelum dipotong |
+| `UNMATCHED_TTL_DAYS` | `7` | Usia maksimum payload (hari) |
 
 Salin `.env.example` menjadi `.env` jika ingin mengubah nilai default.
 
@@ -621,6 +634,7 @@ cargo fmt --check
 ├── src/
 │   ├── lib.rs            # Device registry, state panic, broadcast
 │   ├── store.rs          # Penyimpanan konfigurasi device (JSON)
+│   ├── raw_capture.rs    # History payload yang belum didukung (JSON)
 │   ├── mqtt.rs           # Subscriber Meshtastic JSON
 │   └── bin/
 │       ├── server.rs     # HTTP API, WebSocket, static files

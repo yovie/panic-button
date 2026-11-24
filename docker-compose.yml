@@ -17,6 +17,11 @@ services:
       PANIC_KEYWORD: "${PANIC_KEYWORD:-PANIC,SOS}"
       MESHTASTIC_PSK: "${MESHTASTIC_PSK:-AQ==}"
       DEVICES_FILE: "/app/data/devices.json"
+      UNMATCHED_FILE: "/app/data/unmatched.json"
+      UNMATCHED_MAX: "${UNMATCHED_MAX:-500}"
+      UNMATCHED_PER_DEVICE: "${UNMATCHED_PER_DEVICE:-50}"
+      UNMATCHED_MAX_BYTES: "${UNMATCHED_MAX_BYTES:-8192}"
+      UNMATCHED_TTL_DAYS: "${UNMATCHED_TTL_DAYS:-7}"
     volumes:
       - device-data:/app/data
     depends_on:

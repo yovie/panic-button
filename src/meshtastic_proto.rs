@@ -1,4 +1,4 @@
-use crate::adapters::{AdapterAction, MqttAdapter};
+use crate::adapters::{AdapterAction, DetectOutcome, MqttAdapter};
 use crate::{DeviceType, EventKind, IngestEvent, Protocol, valid_position};
 use aes::cipher::{KeyIvInit, StreamCipher};
 use aes::{Aes128, Aes256};
@@ -212,6 +212,77 @@ impl MqttAdapter for MeshtasticProtoAdapter {
             None => return Some(Vec::new()),
         };
         Some(self.data_actions(&device_id, &data))
+    }
+
+    fn detect_outcome(&self, topic: &str, payload: &[u8]) -> DetectOutcome {
+        if !is_meshtastic_proto_topic(topic) {
+            return DetectOutcome::NoMatch;
+        }
+        let envelope = match ServiceEnvelope::decode(payload) {
+            Ok(envelope) => envelope,
+            Err(_) => {
+                return DetectOutcome::Skipped {
+                    reason: "decode_failed",
+                };
+            }
+        };
+        let ServiceEnvelope {
+            packet, channel_id, ..
+        } = envelope;
+        let Some(packet) = packet else {
+            return DetectOutcome::Skipped {
+                reason: "missing_packet",
+            };
+        };
+        let from = packet.from;
+        if from == 0 {
+            return DetectOutcome::Skipped {
+                reason: "missing_packet",
+            };
+        }
+        let device_id = format!("!{from:08x}");
+        let data = match packet.payload_variant {
+            Some(mesh_packet::PayloadVariant::Decoded(data)) => data,
+            Some(mesh_packet::PayloadVariant::Encrypted(encrypted)) => {
+                if channel_id == "PKI" || packet.pki_encrypted {
+                    if self.should_log(&format!("pki:{topic}"), PKI_LOG_INTERVAL) {
+                        warn!(
+                            topic,
+                            from = %device_id,
+                            to = packet.to,
+                            channel = %channel_id,
+                            "Meshtastic PKI packet cannot be decrypted without the node private key"
+                        );
+                    }
+                    return DetectOutcome::Skipped {
+                        reason: "pki_encrypted",
+                    };
+                }
+                match self.decrypt_data(from, packet.id, &encrypted) {
+                    Some(data) => data,
+                    None => {
+                        if self.should_log(&format!("decrypt:{topic}"), DECRYPT_LOG_INTERVAL) {
+                            warn!(
+                                topic,
+                                from = %device_id,
+                                packet_id = packet.id,
+                                len = encrypted.len(),
+                                "Meshtastic channel packet decryption failed; check MESHTASTIC_PSK"
+                            );
+                        }
+                        return DetectOutcome::Skipped {
+                            reason: "decrypt_failed",
+                        };
+                    }
+                }
+            }
+            None => {
+                return DetectOutcome::Skipped {
+                    reason: "missing_packet",
+                };
+            }
+        };
+        DetectOutcome::Handled(self.data_actions(&device_id, &data))
     }
 }
 

@@ -7,6 +7,7 @@ use tokio::sync::{RwLock, broadcast};
 pub mod adapters;
 pub mod meshtastic_proto;
 pub mod mqtt;
+pub mod raw_capture;
 pub mod store;
 
 pub const EVENT_CHANNEL_CAPACITY: usize = 1024;
@@ -130,6 +131,7 @@ pub enum ServerMessage {
     Panic { device: Device },
     PanicCleared { device: Device },
     Removed { id: String },
+    RawCaptured { device_key: String, count: usize },
 }
 
 #[derive(Debug, Default)]
@@ -170,6 +172,12 @@ impl Registry {
 
     pub fn subscribe(&self) -> broadcast::Receiver<ServerMessage> {
         self.tx.subscribe()
+    }
+
+    pub fn notify_raw(&self, device_key: String, count: usize) {
+        let _ = self
+            .tx
+            .send(ServerMessage::RawCaptured { device_key, count });
     }
 
     pub async fn snapshot(&self) -> Vec<Device> {

@@ -10,11 +10,14 @@ use axum::{
 use panic_button::adapters::HttpAdapter;
 use panic_button::{
     Device, DeviceConfig, DeviceType, IngestEvent, Protocol, Registry, ServerMessage, adapters,
-    mqtt, normalize_imei, store::DeviceStore, valid_device_id, valid_position,
+    mqtt, normalize_imei,
+    raw_capture::{CaptureSource, RawCaptureLimits, RawCaptureStore, RawDevice, RawPayload},
+    store::DeviceStore,
+    valid_device_id, valid_position,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::HashSet, env, net::SocketAddr, sync::Arc};
+use std::{collections::HashSet, env, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, broadcast::error::RecvError};
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 use tracing::{info, warn};
@@ -25,6 +28,7 @@ struct AppState {
     registry: Arc<Registry>,
     store: Arc<Mutex<DeviceStore>>,
     http_adapters: Arc<Vec<Box<dyn HttpAdapter>>>,
+    raw: Arc<RawCaptureStore>,
 }
 
 #[tokio::main]
@@ -48,6 +52,25 @@ async fn main() -> anyhow::Result<()> {
         "device store loaded"
     );
 
+    let raw_file = env_or("UNMATCHED_FILE", "data/unmatched.json");
+    let raw = Arc::new(
+        RawCaptureStore::load(
+            &raw_file,
+            RawCaptureLimits {
+                max_entries: env_usize("UNMATCHED_MAX", 500),
+                max_per_device: env_usize("UNMATCHED_PER_DEVICE", 50),
+                max_bytes: env_usize("UNMATCHED_MAX_BYTES", 8192),
+                ttl: Duration::from_secs(env_u64("UNMATCHED_TTL_DAYS", 7) * 24 * 60 * 60),
+            },
+        )
+        .await,
+    );
+    info!(
+        path = %raw_file,
+        entries = raw.count().await,
+        "raw capture store loaded"
+    );
+
     if env_flag("MQTT_ENABLED", false) {
         let panic_keywords: Vec<String> = env_or("PANIC_KEYWORD", "PANIC,SOS")
             .split(',')
@@ -69,9 +92,10 @@ async fn main() -> anyhow::Result<()> {
         };
         let mqtt_registry = registry.clone();
         let mqtt_adapters = adapters::mqtt_adapters(panic_keywords, meshtastic_psks);
+        let mqtt_raw = raw.clone();
         tokio::spawn(async move {
             if let Err(error) =
-                adapters::run_mqtt_universal(mqtt_registry, config, mqtt_adapters).await
+                adapters::run_mqtt_universal(mqtt_registry, config, mqtt_adapters, mqtt_raw).await
             {
                 warn!(%error, "MQTT adapter subscriber stopped");
             }
@@ -82,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
         registry: registry.clone(),
         store: Arc::new(Mutex::new(store)),
         http_adapters: Arc::new(adapters::http_adapters()),
+        raw,
     };
 
     let static_dir = env_or("STATIC_DIR", "static");
@@ -100,6 +125,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/devices/{id}/panic", post(trigger_panic))
         .route("/api/devices/{id}/resolve", post(resolve_panic))
+        .route(
+            "/api/unmatched",
+            get(list_unmatched).delete(clear_unmatched),
+        )
+        .route("/api/unmatched/payloads", get(unmatched_payloads))
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
@@ -128,13 +158,29 @@ async fn ingest(
     apply_ingested_event(&state, event).await
 }
 
+async fn capture_http_failure(state: &AppState, topic: &str, bytes: Vec<u8>) {
+    let captured = state
+        .raw
+        .record(CaptureSource::Http, topic, "http_no_adapter", &bytes)
+        .await;
+    state
+        .registry
+        .notify_raw(captured.device_key, state.raw.count().await);
+}
+
 async fn ingest_auto_get(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Device>, (StatusCode, String)> {
+    let raw_bytes = serde_json::to_vec(&json!({ "query": &query })).unwrap_or_default();
     let request = adapters::HttpRequest { query, body: None };
-    let event = adapters::detect_http(&request, &state.http_adapters)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "no adapter matched".to_string()))?;
+    let event = match adapters::detect_http(&request, &state.http_adapters) {
+        Some(event) => event,
+        None => {
+            capture_http_failure(&state, "/api/ingest/auto", raw_bytes).await;
+            return Err((StatusCode::BAD_REQUEST, "no adapter matched".to_string()));
+        }
+    };
     apply_ingested_event(&state, event).await
 }
 
@@ -143,12 +189,19 @@ async fn ingest_auto_post(
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
     Json(body): Json<Value>,
 ) -> Result<Json<Device>, (StatusCode, String)> {
+    let raw_bytes =
+        serde_json::to_vec(&json!({ "query": &query, "body": &body })).unwrap_or_default();
     let request = adapters::HttpRequest {
         query,
         body: Some(body),
     };
-    let event = adapters::detect_http(&request, &state.http_adapters)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "no adapter matched".to_string()))?;
+    let event = match adapters::detect_http(&request, &state.http_adapters) {
+        Some(event) => event,
+        None => {
+            capture_http_failure(&state, "/api/ingest/auto", raw_bytes).await;
+            return Err((StatusCode::BAD_REQUEST, "no adapter matched".to_string()));
+        }
+    };
     apply_ingested_event(&state, event).await
 }
 
@@ -197,6 +250,36 @@ async fn apply_ingested_event(
 
 async fn list_devices(State(state): State<AppState>) -> Json<Vec<Device>> {
     Json(state.registry.snapshot().await)
+}
+
+#[derive(Debug, Deserialize)]
+struct RawKeyQuery {
+    key: Option<String>,
+}
+
+async fn list_unmatched(State(state): State<AppState>) -> Json<Vec<RawDevice>> {
+    Json(state.raw.devices().await)
+}
+
+async fn unmatched_payloads(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<RawKeyQuery>,
+) -> Json<Vec<RawPayload>> {
+    Json(state.raw.history(query.key.as_deref().unwrap_or("")).await)
+}
+
+async fn clear_unmatched(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<RawKeyQuery>,
+) -> Json<Value> {
+    let removed = match query.key {
+        Some(key) => state.raw.clear(&key).await,
+        None => state.raw.clear_all().await,
+    };
+    state
+        .registry
+        .notify_raw(String::new(), state.raw.count().await);
+    Json(json!({ "removed": removed }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -546,6 +629,20 @@ async fn send_message(socket: &mut WebSocket, message: &ServerMessage) -> Result
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 fn env_flag(key: &str, default: bool) -> bool {

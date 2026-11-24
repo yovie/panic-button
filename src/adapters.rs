@@ -297,8 +297,15 @@ impl MqttAdapter for OwnTracksAdapter {
     }
 
     fn detect(&self, topic: &str, payload: &[u8]) -> Option<Vec<AdapterAction>> {
+        if std::str::from_utf8(payload).is_ok_and(|text| text.trim().eq_ignore_ascii_case("lwt")) {
+            return Some(Vec::new());
+        }
         let value: Value = serde_json::from_slice(payload).ok()?;
-        if value.get("_type").and_then(Value::as_str) != Some("location") {
+        let kind = value.get("_type").and_then(Value::as_str);
+        if kind == Some("lwt") {
+            return Some(Vec::new());
+        }
+        if kind != Some("location") {
             return None;
         }
         owntracks_event(topic, &value).map(|event| vec![AdapterAction::Apply(event)])
@@ -862,5 +869,42 @@ fn payload_preview(payload: &[u8]) -> String {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn owntracks_lwt_is_handled_without_actions() {
+        let adapter = OwnTracksAdapter;
+        let outcome = adapter.detect_outcome("owntracks/meshtastic/a32x", br#"{"_type":"lwt"}"#);
+        assert!(matches!(outcome, DetectOutcome::Handled(actions) if actions.is_empty()));
+
+        let outcome = adapter.detect_outcome("owntracks/meshtastic/a32x", b"lwt\n");
+        assert!(matches!(outcome, DetectOutcome::Handled(actions) if actions.is_empty()));
+    }
+
+    #[test]
+    fn owntracks_location_still_produces_event() {
+        let payload = json!({
+            "_type": "location",
+            "lat": -6.2,
+            "lon": 106.8,
+            "tid": "a32x"
+        })
+        .to_string();
+        let outcome =
+            OwnTracksAdapter.detect_outcome("owntracks/meshtastic/a32x", payload.as_bytes());
+        let DetectOutcome::Handled(actions) = outcome else {
+            panic!("expected location to be handled");
+        };
+        assert_eq!(actions.len(), 1);
+        let AdapterAction::Apply(event) = &actions[0] else {
+            panic!("expected apply action");
+        };
+        assert_eq!(event.device_id, "owntracks:meshtastic:a32x");
     }
 }

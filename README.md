@@ -25,6 +25,8 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
 - Menu **Data Mentah**: mencatat payload MQTT/HTTP yang tidak cocok dengan adapter atau
   gagal diproses (decode/dekripsi), dikelompokkan per device dengan history payload,
   tersimpan di `data/unmatched.json` dengan batas 500 entri / 50 per device / 8 KB / 7 hari.
+  Pesan kontrol OwnTracks (`_type: lwt`, *Last Will and Testament*) dikenali adapter dan
+  diabaikan, sehingga tidak tercatat sebagai `no_adapter`.
 - Simulator dua mode (HTTP dan Meshtastic MQTT) untuk demo tanpa hardware.
 - Mode publik: tanpa login dan CORS terbuka; broker MQTT `1883` anonim untuk lokal,
   `8883` TLS + auth untuk device eksternal.
@@ -673,6 +675,10 @@ autentikasi dashboard, TLS end-to-end, dan batasi topik broker dengan ACL.
 - **Device tidak muncul**: pastikan uplink + JSON MQTT aktif, topik cocok, region/channel
   benar, dan firewall VPS membuka port MQTT (`1883`/`8883`). Board nRF52 tidak
   mendukung JSON MQTT.
+- **Data Mentah berisi `{"_type":"lwt"}` dari OwnTracks**: itu pesan *Last Will and
+  Testament* yang dikirim saat koneksi perangkat ke broker terputus, bukan data posisi.
+  Server mengabaikannya sebagai pesan kontrol; entri lama bisa dihapus lewat
+  `DELETE /api/unmatched?key=<key yang tampil di menu>`.
 - **Panic detection sensor tidak terdeteksi**: cek payload JSON dari
   `mosquitto_sub`; server menerima `state`, `detected`, atau menganggap detection
   sebagai panic jika field state tidak ada.

@@ -263,6 +263,9 @@ impl RawCaptureStore {
 }
 
 pub fn extract_device_key(topic: &str, bytes: &[u8]) -> String {
+    if let Some(key) = owntracks_key(topic) {
+        return key;
+    }
     if let Ok(text) = std::str::from_utf8(bytes)
         && let Ok(value) = serde_json::from_str::<Value>(text)
         && let Some(found) = find_id(&value, 0)
@@ -277,6 +280,20 @@ pub fn extract_device_key(topic: &str, bytes: &[u8]) -> String {
         return sanitize(last, 128);
     }
     sanitize(topic, 128)
+}
+
+fn owntracks_key(topic: &str) -> Option<String> {
+    let mut parts = topic.split('/');
+    if parts.next() != Some("owntracks") {
+        return None;
+    }
+    let user = parts.next()?;
+    let device = parts.next()?;
+    if user.is_empty() || device.is_empty() {
+        return None;
+    }
+    let key = format!("owntracks:{user}:{device}");
+    is_plausible_id(&key).then(|| sanitize(&key, 128))
 }
 
 fn find_id(value: &Value, depth: usize) -> Option<String> {
@@ -413,6 +430,12 @@ mod tests {
             "panic-button-raw-{name}-{}.json",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn extracts_canonical_key_from_owntracks_topic() {
+        let key = extract_device_key("owntracks/meshtastic/a32x", br#"{"_type":"lwt"}"#);
+        assert_eq!(key, "owntracks:meshtastic:a32x");
     }
 
     #[test]

@@ -16,8 +16,9 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
   setelah restart.
 - **IMEI sebagai Device ID** untuk protokol non-Meshtastic: Device ID boleh dikosongkan,
   IMEI 15–16 digit dipakai sebagai ID. Serial/IMEI unik dan ikut tercari di modal.
-- Ingest Meshtastic via MQTT (nodeinfo, position, telemetry, detection_sensor, text keyword),
-  termasuk listener TLS 8883 dengan username/password untuk development.
+- Ingest Meshtastic via MQTT (JSON dan protobuf: nodeinfo, position, telemetry,
+  detection_sensor, text/alert keyword), termasuk listener TLS 8883 dengan
+  username/password untuk development.
 - Ingest HTTP generik untuk perangkat lain/simulator.
 - Simulator dua mode (HTTP dan Meshtastic MQTT) untuk demo tanpa hardware.
 - Mode publik: tanpa login dan CORS terbuka; broker MQTT `1883` anonim untuk lokal,
@@ -143,17 +144,26 @@ browser dapat terhubung bersamaan.
 
 ### Pemetaan Pesan MQTT Meshtastic
 
-Topik: `msh/<region>/2/json/<channel>/<userid>` (subscribe default
-`msh/+/2/json/+/#`). Device ID diturunkan dari field `from` (desimal) menjadi
-`!xxxxxxxx`.
+Server mendukung JSON dan protobuf:
 
-| `type` | Field yang dipakai | Aksi |
-|---|---|---|
-| `nodeinfo` | `payload.longname` / `shortname` | Simpan nama device |
-| `position` | `latitude_i`, `longitude_i` (× 1e-7), `ground_speed` (m/s), `ground_track`, `battery_level` | Update posisi (heartbeat) |
-| `telemetry` | `payload.battery_level` | Update baterai |
-| `detection_sensor` | `payload.state` / `detected` | Set panic / resolve |
-| `text` | `payload.text` | Panic jika mengandung `PANIC`/`SOS` |
+- JSON: `msh/<region>/2/json/<channel>/<userid>`
+- Protobuf: `msh/<region>/2/e/<channel>/<userid>` (legacy `/2/c/`)
+- Subscribe default: `#`. Device ID diturunkan dari field `from` (desimal) menjadi
+  `!xxxxxxxx`.
+
+| Format | `type` / portnum | Field yang dipakai | Aksi |
+|---|---|---|---|
+| JSON | `nodeinfo` | `payload.longname` / `shortname` | Simpan nama device |
+| JSON | `position` | `latitude_i`, `longitude_i` (× 1e-7), `ground_speed` (m/s), `ground_track`, `battery_level` | Update posisi (heartbeat) |
+| JSON | `telemetry` | `payload.battery_level` | Update baterai |
+| JSON | `detection_sensor` | `payload.state` / `detected` | Set panic / resolve |
+| JSON | `text` | `payload.text` | Panic jika mengandung `PANIC`/`SOS` |
+| Proto | `POSITION_APP` | `latitude_i`, `longitude_i` (× 1e-7), `ground_speed` (m/s), `ground_track` (1/100°) | Update posisi (heartbeat) |
+| Proto | `NODEINFO_APP` | `long_name` / `short_name` | Simpan nama device |
+| Proto | `TELEMETRY_APP` | `device_metrics.battery_level` | Update baterai |
+| Proto | `TEXT_MESSAGE_APP` | payload UTF-8 | Panic jika mengandung `PANIC`/`SOS` |
+| Proto | `ALERT_APP`, `DETECTION_SENSOR_APP` | payload | Set panic |
+| Proto | `/PKI/` | terenkripsi X25519 | Dilewati; tidak bisa didekripsi tanpa private key node |
 
 ### Deployment
 
@@ -312,7 +322,7 @@ make deploy-staging STAGING_PORT=18081 STAGING_MQTT_PORT=11883
 ## Menghubungkan Device Meshtastic
 
 1. Gunakan gateway berbasis **ESP32** (mis. T-Beam, Heltec V3, T-Deck). Board nRF52
-   (RAK, T-Echo) tidak mendukung output JSON MQTT.
+   (RAK, T-Echo) tidak menyediakan modul MQTT.
 2. Aktifkan modul MQTT di gateway:
    - Server: untuk dev gunakan `mqtt.jokocloud.my.id` port `8883` dengan TLS aktif;
      untuk publik gunakan IP/domain VPS port `1883` (plaintext) atau `8883` (TLS)
@@ -320,38 +330,63 @@ make deploy-staging STAGING_PORT=18081 STAGING_MQTT_PORT=11883
    - Username/password: `meshtastic` dan isi `mosquitto/.mqtt-password` untuk dev;
      untuk broker publik gunakan kredensial broker Anda
    - Uplink: aktif
-   - JSON output: aktif
    - Channel/region: sesuaikan dengan mesh Anda
-3. Server berlangganan wildcard `msh/+/2/json/+/#` secara default, jadi semua region dan
-   channel akan diterima. Untuk membatasi, set `MQTT_TOPIC`, misal
+3. Server berlangganan wildcard `#` secara default, sehingga menerima JSON maupun
+   protobuf. Untuk membatasi, set `MQTT_TOPIC`, misal `msh/ID/2/#` atau
    `msh/ID/2/json/Panic/#`.
-4. Sumber panic yang didukung:
-   - **Detection Sensor** (tombol GPIO) → paket `detection_sensor` dengan `state: true`.
+4. Server mendukung dua format MQTT Meshtastic:
+   - **JSON** (`msh/<region>/2/json/<channel>/<node>`) untuk firmware 2.7.x dengan
+     *JSON Output* aktif.
+   - **Protobuf** (`msh/<region>/2/e/<channel>/<node>`, legacy `/2/c/`) untuk firmware
+     2.8+ atau saat JSON Output dimatikan. Paket `decoded` langsung diproses; paket
+     channel terenkripsi didekripsi dengan PSK default `AQ==` atau `MESHTASTIC_PSK`.
+   - **PKI** (`/2/e/PKI/<node>`) memakai X25519 + AES-256-CCM dan **tidak bisa
+     didekripsi** tanpa private key node. Server hanya mencatat peringatan dan
+     melewatinya; minta node mengirim posisi sebagai broadcast di channel biasa.
+5. Sumber panic yang didukung:
+   - **Detection Sensor** (tombol GPIO) → paket `detection_sensor` dengan `state: true`
+     (JSON) atau `DETECTION_SENSOR_APP` (protobuf).
    - **Pesan teks** yang mengandung keyword `PANIC` atau `SOS` (bisa diubah via
      `PANIC_KEYWORD`).
-5. Posisi diambil dari paket `position`, nama device dari `nodeinfo`, baterai dari
+   - **Alert** (`ALERT_APP`) di protobuf selalu dianggap panic.
+6. Posisi diambil dari paket `position`, nama device dari `nodeinfo`, baterai dari
    `telemetry`.
-6. Meshtastic **tidak memiliki IMEI**. Untuk node Meshtastic, wajib memakai Node ID
+7. Meshtastic **tidak memiliki IMEI**. Untuk node Meshtastic, wajib memakai Node ID
    `!xxxxxxxx` dari aplikasi Meshtastic (Node Info) sebagai Device ID; kolom Serial/IMEI
    boleh diisi nomor seri perangkat, bukan IMEI.
 
 Verifikasi pesan masuk ke broker:
 
 ```bash
-docker compose exec mosquitto mosquitto_sub -t 'msh/+/2/json/+/#' -v
+docker compose exec mosquitto mosquitto_sub -t 'msh/#' -v
 ```
 
 Pastikan port MQTT (`1883` plaintext atau `8883` TLS) terbuka di firewall agar gateway
 bisa publish. Jika memakai broker Meshtastic publik (`mqtt.meshtastic.org`), ganti
 `MQTT_URL` dan `MQTT_TOPIC` sesuai region/channel yang dipakai.
 
-> **Kompatibilitas firmware:** firmware Meshtastic 2.8 menghapus output JSON MQTT.
-> Gunakan firmware 2.7.x atau bridge `meshtastic/mqtt-converter` agar server ini tetap
-> menerima JSON. Di dev stack, Mosquitto sudah menyediakan listener TLS 8883 dengan
-> auth untuk device; server tetap berlangganan lewat `1883` di jaringan Docker dan
-> belum mendukung `mqtts://` untuk broker remote. Jika domain publik hanya mengekspos
-> port 443, gateway tidak bisa terhubung langsung — gunakan VPN/MQTT Client Proxy atau
-> buka port MQTT dengan pembatasan firewall.
+### PSK channel
+
+PSK default Meshtastic adalah `AQ==`. Jika channel memakai PSK custom, isi
+`MESHTASTIC_PSK` dengan nilai base64 dari aplikasi (Settings → Radio Config →
+Channels → PSK) atau CLI:
+
+```bash
+meshtastic --ch-index 0 --ch-get psk
+```
+
+Beberapa PSK dapat dipisahkan dengan koma, misalnya
+`MESHTASTIC_PSK=AQ==,BASE64_PSK_LAIN`. Nilai 1-byte (`AQ==`, `Ag==`, dst.) diperluas
+sesuai aturan firmware Meshtastic.
+
+> **Kompatibilitas firmware:** firmware Meshtastic 2.8 menghapus output JSON MQTT,
+> tetapi server ini tetap bisa menerima topik protobuf `/2/e/` dan `/2/c/`. Bridge
+> `meshtastic/mqtt-converter` hanya diperlukan jika ingin memaksa format JSON. Di dev
+> stack, Mosquitto sudah menyediakan listener TLS 8883 dengan auth untuk device; server
+> tetap berlangganan lewat `1883` di jaringan Docker dan belum mendukung `mqtts://`
+> untuk broker remote. Jika domain publik hanya mengekspos port 443, gateway tidak bisa
+> terhubung langsung — gunakan VPN/MQTT Client Proxy atau buka port MQTT dengan
+> pembatasan firewall.
 
 ## API
 
@@ -470,6 +505,7 @@ memperbarui registry dan menyiarkan `update`/`removed` via WebSocket.
 | `MQTT_URL` | `mqtt://mosquitto:1883` | URL broker |
 | `MQTT_TOPIC` | `#` | Topik langganan (universal adapter) |
 | `PANIC_KEYWORD` | `PANIC,SOS` | Keyword teks pemicu panic |
+| `MESHTASTIC_PSK` | `AQ==` | PSK channel protobuf, base64; pisahkan dengan koma untuk beberapa channel |
 | `DEVICES_FILE` | `data/devices.json` | Lokasi penyimpanan konfigurasi device |
 
 Salin `.env.example` menjadi `.env` jika ingin mengubah nilai default.

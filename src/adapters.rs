@@ -6,7 +6,7 @@ use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
@@ -684,9 +684,18 @@ pub fn http_adapters() -> Vec<Box<dyn HttpAdapter>> {
     ]
 }
 
-pub fn mqtt_adapters(panic_keywords: Vec<String>) -> Vec<Box<dyn MqttAdapter>> {
+pub fn mqtt_adapters(
+    panic_keywords: Vec<String>,
+    meshtastic_psks: Vec<String>,
+) -> Vec<Box<dyn MqttAdapter>> {
     vec![
-        Box::new(MeshtasticAdapter { panic_keywords }),
+        Box::new(MeshtasticAdapter {
+            panic_keywords: panic_keywords.clone(),
+        }),
+        Box::new(crate::meshtastic_proto::MeshtasticProtoAdapter::new(
+            panic_keywords,
+            meshtastic_psks,
+        )),
         Box::new(OwnTracksAdapter),
         Box::new(TtnAdapter),
         Box::new(GenericMqttAdapter),
@@ -744,6 +753,8 @@ async fn connect_and_poll(
         "connecting universal MQTT adapter subscriber"
     );
 
+    let mut unmatched_log: HashMap<String, Instant> = HashMap::new();
+
     loop {
         match eventloop.poll().await {
             Ok(Event::Incoming(Packet::ConnAck(_))) => {
@@ -756,18 +767,56 @@ async fn connect_and_poll(
                 let mut handled = false;
                 for adapter in adapters {
                     if let Some(actions) = adapter.detect(&publish.topic, &publish.payload) {
+                        let has_actions = !actions.is_empty();
                         apply_actions(&registry, actions).await;
-                        info!(adapter = adapter.name(), topic = %publish.topic, "MQTT adapter matched");
+                        if has_actions {
+                            info!(adapter = adapter.name(), topic = %publish.topic, "MQTT adapter matched");
+                        } else {
+                            debug!(
+                                adapter = adapter.name(),
+                                topic = %publish.topic,
+                                "MQTT adapter handled message without actions"
+                            );
+                        }
                         handled = true;
                         break;
                     }
                 }
-                if !handled {
-                    debug!(topic = %publish.topic, "ignored MQTT message: no adapter matched");
+                if !handled
+                    && should_log(&mut unmatched_log, &publish.topic, Duration::from_secs(60))
+                {
+                    warn!(
+                        topic = %publish.topic,
+                        len = publish.payload.len(),
+                        preview = %payload_preview(&publish.payload),
+                        "unsupported MQTT message: no adapter matched"
+                    );
                 }
             }
             Ok(_) => {}
             Err(error) => return Err(error.into()),
         }
+    }
+}
+
+fn should_log(logs: &mut HashMap<String, Instant>, key: &str, interval: Duration) -> bool {
+    let now = Instant::now();
+    match logs.get(key) {
+        Some(last) if now.duration_since(*last) < interval => false,
+        _ => {
+            logs.insert(key.to_string(), now);
+            true
+        }
+    }
+}
+
+fn payload_preview(payload: &[u8]) -> String {
+    let limit = payload.len().min(64);
+    match std::str::from_utf8(&payload[..limit]) {
+        Ok(text) => text.escape_default().to_string(),
+        Err(_) => payload[..limit]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
     }
 }

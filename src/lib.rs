@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 
 pub mod adapters;
+pub mod meshtastic_proto;
 pub mod mqtt;
 pub mod store;
 

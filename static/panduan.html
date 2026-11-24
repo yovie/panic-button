@@ -556,10 +556,18 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
 
         <h3>Prasyarat perangkat</h3>
         <ul>
-          <li>Gunakan gateway berbasis <strong>ESP32</strong> (T-Beam, Heltec V3, T-Deck, dll). Board nRF52 seperti RAK dan T-Echo tidak mendukung output JSON MQTT.</li>
-          <li>Firmware <strong>2.7.x atau lebih lama</strong> dengan opsi <em>JSON Output</em> aktif. Firmware 2.8 menghapus dukungan JSON MQTT; untuk firmware 2.8+ perlu bridge seperti <code>meshtastic/mqtt-converter</code> agar server tetap menerima JSON.</li>
+          <li>Gunakan gateway berbasis <strong>ESP32</strong> (T-Beam, Heltec V3, T-Deck, dll). Board nRF52 seperti RAK dan T-Echo tidak menyediakan modul MQTT.</li>
+          <li>Firmware <strong>2.7.x</strong> dengan <em>JSON Output</em> aktif, atau firmware <strong>2.8+</strong> yang mengirim protobuf. Server mendukung topik JSON <code>/2/json/</code> maupun protobuf <code>/2/e/</code> dan legacy <code>/2/c/</code>.</li>
           <li>Gateway punya koneksi jaringan ke broker, baik langsung, lewat VPN, maupun melalui <em>MQTT Client Proxy</em> di HP.</li>
           <li>Untuk listener <code>8883</code>: username <code>meshtastic</code> dan password dari <code>mosquitto/.mqtt-password</code> (dibuat dengan <code>make mqtt-setup</code>).</li>
+        </ul>
+
+        <h3>Format pesan: JSON vs protobuf</h3>
+        <ul>
+          <li><strong>JSON</strong> — topik <code>msh/&lt;region&gt;/2/json/&lt;channel&gt;/&lt;node&gt;</code>. Paket <code>position</code>, <code>nodeinfo</code>, <code>telemetry</code>, <code>text</code>, dan <code>detection_sensor</code> diproses langsung.</li>
+          <li><strong>Protobuf</strong> — topik <code>msh/&lt;region&gt;/2/e/&lt;channel&gt;/&lt;node&gt;</code> (atau <code>/2/c/</code>). Paket <code>decoded</code> diproses tanpa PSK; paket channel terenkripsi didekripsi dengan PSK default <code>AQ==</code> atau <code>MESHTASTIC_PSK</code>.</li>
+          <li><strong>PKI</strong> — topik <code>/2/e/PKI/&lt;node&gt;</code> memakai X25519 + AES-256-CCM dan tidak bisa didekripsi tanpa private key node. Server mencatat peringatan lalu melewatinya. Minta node mengirim posisi sebagai broadcast di channel biasa.</li>
+          <li>PSK custom dapat dilihat di aplikasi Meshtastic: <strong>Settings → Radio Config → Channels → PSK</strong>, atau CLI <code>meshtastic --ch-index 0 --ch-get psk</code>. Isi <code>MESHTASTIC_PSK</code> dengan nilai base64; beberapa PSK dipisahkan koma.</li>
         </ul>
 
         <h3>Opsi jalur jaringan</h3>
@@ -994,8 +1002,8 @@ cargo run --bin simulator -- \
               </tr>
               <tr>
                 <td>Device Meshtastic tidak muncul</td>
-                <td>JSON off, firmware 2.8+, topik/region salah, port MQTT tertutup, atau kredensial/TLS salah.</td>
-                <td>Aktifkan JSON, pakai firmware 2.7.x atau bridge, cek topik, konektivitas broker, dan kredensial 8883.</td>
+                <td>Topik/region salah, port MQTT tertutup, kredensial/TLS salah, PSK channel custom, atau paket hanya PKI.</td>
+                <td>Cek topik <code>/2/json/</code> atau <code>/2/e/</code>, konektivitas broker, kredensial 8883, dan <code>MESHTASTIC_PSK</code>. Untuk PKI, minta node mengirim broadcast di channel biasa.</td>
               </tr>
               <tr>
                 <td>MQTT terhubung tapi data kosong</td>
@@ -1061,7 +1069,7 @@ cargo run --bin simulator -- \
               <tr>
                 <td>Meshtastic</td>
                 <td>MQTT WSS <code>wss://mqtt-panic-button.jokocloud.my.id</code></td>
-                <td>JSON Meshtastic: <code>type</code>, <code>from</code>, <code>payload.latitude_i</code></td>
+                <td>JSON (<code>type</code>, <code>from</code>, <code>payload.latitude_i</code>) atau protobuf <code>ServiceEnvelope</code> pada topik <code>/2/e/</code> / <code>/2/c/</code></td>
               </tr>
               <tr>
                 <td>OwnTracks</td>

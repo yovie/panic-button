@@ -55,6 +55,12 @@ async fn main() -> anyhow::Result<()> {
             .filter(|keyword| !keyword.is_empty())
             .map(str::to_string)
             .collect();
+        let meshtastic_psks: Vec<String> = env_or("MESHTASTIC_PSK", "AQ==")
+            .split(',')
+            .map(str::trim)
+            .filter(|psk| !psk.is_empty())
+            .map(str::to_string)
+            .collect();
         let config = mqtt::MqttConfig {
             url: env_or("MQTT_URL", "mqtt://localhost:1883"),
             topic: env_or("MQTT_TOPIC", "#"),
@@ -62,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
             client_id: format!("panic-button-{}", std::process::id()),
         };
         let mqtt_registry = registry.clone();
-        let mqtt_adapters = adapters::mqtt_adapters(panic_keywords);
+        let mqtt_adapters = adapters::mqtt_adapters(panic_keywords, meshtastic_psks);
         tokio::spawn(async move {
             if let Err(error) =
                 adapters::run_mqtt_universal(mqtt_registry, config, mqtt_adapters).await

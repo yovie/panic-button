@@ -339,10 +339,11 @@ make deploy-staging STAGING_PORT=18081 STAGING_MQTT_PORT=11883
      untuk broker publik gunakan kredensial broker Anda
    - Uplink: aktif
    - Channel/region: sesuaikan dengan mesh Anda
-3. Server berlangganan `#` secara default, sehingga menerima JSON maupun
-   protobuf dari semua topik. `MQTT_TOPIC` menerima daftar dipisah koma, misal
-   `msh/#, owntracks/#`; data tracking GPS memakai `MQTT_TRACKING_TOPIC`
+3. Server berlangganan `msh/#` secara default, sehingga menerima JSON maupun
+   protobuf dari topik Meshtastic. `MQTT_TOPIC` menerima daftar dipisah koma,
+   misal `msh/#, owntracks/#`; data tracking GPS memakai `MQTT_TRACKING_TOPIC`
    (default `gps/#`) dan otomatis ditambahkan bila tidak tercakup wildcard.
+   Topik tambahan juga dapat dikelola lewat menu **Topik MQTT** di web UI.
 4. Server mendukung dua format MQTT Meshtastic:
    - **JSON** (`msh/<region>/2/json/<channel>/<node>`) untuk firmware 2.7.x dengan
      *JSON Output* aktif.
@@ -400,8 +401,8 @@ sesuai aturan firmware Meshtastic.
 ### Tracking GPS via MQTT
 
 Data tracking GPS masuk lewat topik `gps/#` (default `MQTT_TRACKING_TOPIC`).
-Dengan `MQTT_TOPIC=#` (default), topik ini otomatis tercakup; subscription
-terpisah dipakai saat `MQTT_TOPIC` dibatasi.
+Dengan `MQTT_TOPIC=msh/#` (default), topik ini ditambahkan terpisah; subscription
+otomatis dilewati bila sudah tercakup wildcard.
 Publish ke `gps` atau `gps/<device_id>` dengan payload JSON minimal `lat` dan
 `lon`:
 
@@ -431,6 +432,9 @@ atau `tracker`; jika tidak ada, server memakai segmen terakhir topik
 | GET | `/api/unmatched` | Daftar device dengan payload yang belum didukung |
 | GET | `/api/unmatched/payloads?key=...` | History payload untuk satu device (terbaru dulu) |
 | DELETE | `/api/unmatched?key=...` | Hapus history satu device; tanpa `key` menghapus semua |
+| GET | `/api/topics` | Daftar baseline, topik tambahan, dan topik efektif |
+| POST | `/api/topics` | Tambah topik MQTT (body `{ topic, label? }`) |
+| DELETE | `/api/topics?topic=...` | Hapus topik MQTT tambahan |
 | GET | `/ws` | WebSocket realtime |
 | GET | `/health` | Health check + jumlah device |
 
@@ -534,8 +538,9 @@ memperbarui registry dan menyiarkan `update`/`removed` via WebSocket.
 | `RUST_LOG` | `info` | Level log server |
 | `MQTT_ENABLED` | `true` | Aktifkan subscriber Meshtastic |
 | `MQTT_URL` | `mqtt://mosquitto:1883` | URL broker |
-| `MQTT_TOPIC` | `#` | Topik langganan universal adapter; mendukung daftar dipisah koma |
+| `MQTT_TOPIC` | `msh/#` | Topik langganan universal adapter; mendukung daftar dipisah koma |
 | `MQTT_TRACKING_TOPIC` | `gps/#` | Topik langganan data tracking GPS |
+| `TOPICS_FILE` | `data/topics.json` | Penyimpanan topik tambahan dari menu Topik MQTT |
 | `PANIC_KEYWORD` | `PANIC,SOS` | Keyword teks pemicu panic |
 | `MESHTASTIC_PSK` | `AQ==` | PSK channel protobuf, base64; pisahkan dengan koma untuk beberapa channel |
 | `DEVICES_FILE` | `data/devices.json` | Lokasi penyimpanan konfigurasi device |

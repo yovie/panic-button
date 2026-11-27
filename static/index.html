@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f7f9fc">
   <title>Panic Button — Live Tracking</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20261124b">
+  <link rel="stylesheet" href="/style.css?v=20261127a">
 </head>
 <body>
   <header class="topbar">
@@ -19,6 +19,7 @@
     </div>
     <div class="topbar-actions">
       <a class="btn ghost" href="/panduan.html">Panduan</a>
+      <button id="topics-btn" class="btn ghost" type="button">Topik MQTT</button>
       <button id="raw-btn" class="btn ghost" type="button">Data Mentah <span id="raw-badge" class="chip hidden">0</span></button>
       <button id="manage-btn" class="btn" type="button">Kelola Device</button>
       <button id="sound-btn" class="btn ghost" type="button">Suara: OFF</button>
@@ -166,7 +167,51 @@
     </div>
   </div>
 
+  <div id="topics-overlay" class="overlay hidden">
+    <div class="modal topics-modal" role="dialog" aria-modal="true" aria-labelledby="topics-title">
+      <header class="modal-head">
+        <div>
+          <h2 id="topics-title">Topik MQTT</h2>
+          <p>Tambahkan sumber data MQTT tanpa restart server</p>
+        </div>
+        <button id="topics-close" class="btn ghost" type="button">Tutup</button>
+      </header>
+      <div class="modal-body topics-body">
+        <section class="topics-section">
+          <div class="topics-section-head">
+            <h3>Topik dari environment</h3>
+            <span id="topics-status" class="chip">Memuat</span>
+          </div>
+          <div id="topics-baseline" class="topic-chips"></div>
+          <p id="topics-warning" class="topic-warning hidden"></p>
+        </section>
+        <section class="topics-section">
+          <div class="topics-section-head">
+            <h3>Topik tambahan</h3>
+            <span id="topics-count" class="chip">0</span>
+          </div>
+          <ul id="topics-list" class="topics-list"></ul>
+        </section>
+        <form id="topic-form" class="topic-form" novalidate>
+          <div class="form-grid">
+            <label>Topik MQTT
+              <input id="topic-input" maxlength="256" placeholder="owntracks/#" autocomplete="off">
+            </label>
+            <label>Label (opsional)
+              <input id="topic-label" maxlength="80" placeholder="OwnTracks" autocomplete="off">
+            </label>
+          </div>
+          <div id="topic-error" class="form-error hidden"></div>
+          <div class="form-actions">
+            <button type="submit" class="btn primary" id="topic-submit">Tambah Topik</button>
+            <span class="form-mode">Perubahan langsung diterapkan</span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20261124b"></script>
+  <script src="/app.js?v=20261127a"></script>
 </body>
 </html>

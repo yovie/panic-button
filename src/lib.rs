@@ -9,6 +9,7 @@ pub mod meshtastic_proto;
 pub mod mqtt;
 pub mod raw_capture;
 pub mod store;
+pub mod topics;
 
 pub const EVENT_CHANNEL_CAPACITY: usize = 1024;
 

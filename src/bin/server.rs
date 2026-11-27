@@ -13,6 +13,7 @@ use panic_button::{
     mqtt, normalize_imei,
     raw_capture::{CaptureSource, RawCaptureLimits, RawCaptureStore, RawDevice, RawPayload},
     store::DeviceStore,
+    topics::{TopicError, TopicManager, TopicState, TopicStore},
     valid_device_id, valid_position,
 };
 use serde::Deserialize;
@@ -29,6 +30,7 @@ struct AppState {
     store: Arc<Mutex<DeviceStore>>,
     http_adapters: Arc<Vec<Box<dyn HttpAdapter>>>,
     raw: Arc<RawCaptureStore>,
+    topics: Arc<TopicManager>,
 }
 
 #[tokio::main]
@@ -71,32 +73,55 @@ async fn main() -> anyhow::Result<()> {
         "raw capture store loaded"
     );
 
-    if env_flag("MQTT_ENABLED", false) {
-        let panic_keywords: Vec<String> = env_or("PANIC_KEYWORD", "PANIC,SOS")
-            .split(',')
-            .map(str::trim)
-            .filter(|keyword| !keyword.is_empty())
-            .map(str::to_string)
-            .collect();
-        let meshtastic_psks: Vec<String> = env_or("MESHTASTIC_PSK", "AQ==")
-            .split(',')
-            .map(str::trim)
-            .filter(|psk| !psk.is_empty())
-            .map(str::to_string)
-            .collect();
-        let config = mqtt::MqttConfig {
-            url: env_or("MQTT_URL", "mqtt://localhost:1883"),
-            topic: env_or("MQTT_TOPIC", "#"),
-            tracking_topic: env_or("MQTT_TRACKING_TOPIC", "gps/#"),
-            panic_keywords: panic_keywords.clone(),
-            client_id: format!("panic-button-{}", std::process::id()),
-        };
+    let mqtt_enabled = env_flag("MQTT_ENABLED", false);
+    let panic_keywords: Vec<String> = env_or("PANIC_KEYWORD", "PANIC,SOS")
+        .split(',')
+        .map(str::trim)
+        .filter(|keyword| !keyword.is_empty())
+        .map(str::to_string)
+        .collect();
+    let meshtastic_psks: Vec<String> = env_or("MESHTASTIC_PSK", "AQ==")
+        .split(',')
+        .map(str::trim)
+        .filter(|psk| !psk.is_empty())
+        .map(str::to_string)
+        .collect();
+    let config = mqtt::MqttConfig {
+        url: env_or("MQTT_URL", "mqtt://localhost:1883"),
+        topic: env_or("MQTT_TOPIC", "msh/#"),
+        tracking_topic: env_or("MQTT_TRACKING_TOPIC", "gps/#"),
+        panic_keywords: panic_keywords.clone(),
+        client_id: format!("panic-button-{}", std::process::id()),
+    };
+    let baseline_topics = config.baseline_topics();
+
+    let topics_file = env_or("TOPICS_FILE", "data/topics.json");
+    let topic_store = TopicStore::load(&topics_file).await;
+    info!(
+        path = %topics_file,
+        topics = topic_store.len(),
+        "topic store loaded"
+    );
+    let topics = Arc::new(TopicManager::new(
+        baseline_topics,
+        topic_store,
+        mqtt_enabled,
+    ));
+
+    if mqtt_enabled {
         let mqtt_registry = registry.clone();
         let mqtt_adapters = adapters::mqtt_adapters(panic_keywords, meshtastic_psks);
         let mqtt_raw = raw.clone();
+        let mqtt_topics = topics.clone();
         tokio::spawn(async move {
-            if let Err(error) =
-                adapters::run_mqtt_universal(mqtt_registry, config, mqtt_adapters, mqtt_raw).await
+            if let Err(error) = adapters::run_mqtt_universal(
+                mqtt_registry,
+                config,
+                mqtt_adapters,
+                mqtt_raw,
+                mqtt_topics,
+            )
+            .await
             {
                 warn!(%error, "MQTT adapter subscriber stopped");
             }
@@ -108,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         store: Arc::new(Mutex::new(store)),
         http_adapters: Arc::new(adapters::http_adapters()),
         raw,
+        topics,
     };
 
     let static_dir = env_or("STATIC_DIR", "static");
@@ -131,6 +157,10 @@ async fn main() -> anyhow::Result<()> {
             get(list_unmatched).delete(clear_unmatched),
         )
         .route("/api/unmatched/payloads", get(unmatched_payloads))
+        .route(
+            "/api/topics",
+            get(list_topics).post(create_topic).delete(delete_topic),
+        )
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
@@ -281,6 +311,63 @@ async fn clear_unmatched(
         .registry
         .notify_raw(String::new(), state.raw.count().await);
     Json(json!({ "removed": removed }))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTopicRequest {
+    topic: String,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteTopicQuery {
+    topic: String,
+}
+
+async fn list_topics(State(state): State<AppState>) -> Json<TopicState> {
+    Json(state.topics.state().await)
+}
+
+async fn create_topic(
+    State(state): State<AppState>,
+    Json(request): Json<CreateTopicRequest>,
+) -> Result<(StatusCode, Json<TopicState>), (StatusCode, String)> {
+    let topic_state = state
+        .topics
+        .add(&request.topic, request.label)
+        .await
+        .map_err(topic_error)?;
+    Ok((StatusCode::CREATED, Json(topic_state)))
+}
+
+async fn delete_topic(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<DeleteTopicQuery>,
+) -> Result<Json<TopicState>, (StatusCode, String)> {
+    state
+        .topics
+        .remove(&query.topic)
+        .await
+        .map(Json)
+        .map_err(topic_error)
+}
+
+fn topic_error(error: TopicError) -> (StatusCode, String) {
+    match error {
+        TopicError::Invalid(message) | TopicError::Limit(message) => {
+            (StatusCode::BAD_REQUEST, message)
+        }
+        TopicError::Duplicate(message) => (StatusCode::CONFLICT, message),
+        TopicError::NotFound(message) => (StatusCode::NOT_FOUND, message),
+        TopicError::Persist(error) => {
+            warn!(%error, "failed to persist topic store");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to persist topic store".to_string(),
+            )
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

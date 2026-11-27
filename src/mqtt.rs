@@ -3,6 +3,7 @@ use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
@@ -15,6 +16,13 @@ pub struct MqttConfig {
 }
 
 impl MqttConfig {
+    pub fn baseline_topics(&self) -> Vec<String> {
+        self.subscription_topics()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+
     pub fn subscription_topics(&self) -> Vec<&str> {
         let mut topics = Vec::new();
         for topic in self.topic.split(',') {
@@ -35,6 +43,101 @@ impl MqttConfig {
 
         topics
     }
+}
+
+#[derive(Clone, Default)]
+pub struct SubscriptionControl {
+    client: Arc<Mutex<Option<AsyncClient>>>,
+}
+
+impl SubscriptionControl {
+    pub async fn set_client(&self, client: Option<AsyncClient>) {
+        *self.client.lock().await = client;
+    }
+
+    pub async fn is_connected(&self) -> bool {
+        self.client.lock().await.is_some()
+    }
+
+    pub async fn apply(&self, before: &[String], after: &[String]) -> anyhow::Result<()> {
+        let client = self.client.lock().await.clone();
+        let Some(client) = client else {
+            return Ok(());
+        };
+
+        let (added, removed) = subscription_diff(before, after);
+        for topic in removed {
+            client.unsubscribe(topic.clone()).await?;
+            info!(topic = %topic, "unsubscribed MQTT topic");
+        }
+        for topic in added {
+            client.subscribe(topic.clone(), QoS::AtLeastOnce).await?;
+            info!(topic = %topic, "subscribed MQTT topic");
+        }
+        Ok(())
+    }
+}
+
+pub fn subscription_diff(before: &[String], after: &[String]) -> (Vec<String>, Vec<String>) {
+    let added = after
+        .iter()
+        .filter(|topic| !before.contains(topic))
+        .cloned()
+        .collect();
+    let removed = before
+        .iter()
+        .filter(|topic| !after.contains(topic))
+        .cloned()
+        .collect();
+    (added, removed)
+}
+
+pub fn effective_topics(baseline: &[String], custom: &[String]) -> Vec<String> {
+    let mut topics: Vec<String> = Vec::new();
+    for topic in baseline.iter().chain(custom.iter()) {
+        let topic = topic.trim();
+        if topic.is_empty() {
+            continue;
+        }
+        if topics.iter().any(|existing| topic_covers(existing, topic)) {
+            continue;
+        }
+        topics.retain(|existing| !topic_covers(topic, existing));
+        topics.push(topic.to_string());
+    }
+    topics
+}
+
+pub fn topic_covers(parent: &str, child: &str) -> bool {
+    if parent == child || parent == "#" {
+        return true;
+    }
+
+    let parent_levels: Vec<&str> = parent.split('/').collect();
+    let child_levels: Vec<&str> = child.split('/').collect();
+
+    for (index, parent_level) in parent_levels.iter().enumerate() {
+        if *parent_level == "#" {
+            return index + 1 == parent_levels.len();
+        }
+        let Some(child_level) = child_levels.get(index) else {
+            return false;
+        };
+        match *parent_level {
+            "+" => {
+                if *child_level == "#" {
+                    return false;
+                }
+            }
+            literal => {
+                if *child_level == "+" || *child_level == "#" || *child_level != literal {
+                    return false;
+                }
+            }
+        }
+    }
+
+    parent_levels.len() == child_levels.len()
 }
 
 pub struct BrokerAddress {
@@ -404,5 +507,68 @@ mod tests {
         let config = config(" , ", " ");
         let topics = config.subscription_topics();
         assert!(topics.is_empty());
+    }
+
+    #[test]
+    fn builds_owned_baseline_topics() {
+        let config = config("msh/#, owntracks/#", "gps/#");
+        assert_eq!(
+            config.baseline_topics(),
+            vec!["msh/#", "owntracks/#", "gps/#"]
+        );
+    }
+
+    #[test]
+    fn effective_topics_adds_custom_sources() {
+        let baseline = vec!["msh/#".to_string(), "gps/#".to_string()];
+        let custom = vec!["owntracks/#".to_string()];
+        assert_eq!(
+            effective_topics(&baseline, &custom),
+            vec!["msh/#", "gps/#", "owntracks/#"]
+        );
+    }
+
+    #[test]
+    fn effective_topics_collapses_to_catch_all() {
+        let baseline = vec!["msh/#".to_string(), "gps/#".to_string()];
+        let custom = vec!["#".to_string(), "owntracks/#".to_string()];
+        assert_eq!(effective_topics(&baseline, &custom), vec!["#"]);
+    }
+
+    #[test]
+    fn effective_topics_skips_covered_custom_topics() {
+        let baseline = vec!["gps/#".to_string()];
+        let custom = vec![
+            "gps/device-01".to_string(),
+            "gps/+/telemetry".to_string(),
+            "owntracks/#".to_string(),
+        ];
+        assert_eq!(
+            effective_topics(&baseline, &custom),
+            vec!["gps/#", "owntracks/#"]
+        );
+    }
+
+    #[test]
+    fn topic_coverage_handles_wildcards() {
+        assert!(topic_covers("#", "anything/here"));
+        assert!(topic_covers("a/#", "a"));
+        assert!(topic_covers("a/#", "a/b/c"));
+        assert!(topic_covers("a/+", "a/b"));
+        assert!(!topic_covers("a/+", "a"));
+        assert!(!topic_covers("a/+", "a/b/c"));
+        assert!(!topic_covers("a/+", "a/#"));
+        assert!(topic_covers("a/+/#", "a/b/c"));
+        assert!(!topic_covers("a/+/#", "a/#"));
+        assert!(!topic_covers("a", "a/b"));
+    }
+
+    #[test]
+    fn subscription_diff_finds_added_and_removed_topics() {
+        let before = vec!["msh/#".to_string(), "gps/#".to_string()];
+        let after = vec!["msh/#".to_string(), "owntracks/#".to_string()];
+        let (added, removed) = subscription_diff(&before, &after);
+        assert_eq!(added, vec!["owntracks/#"]);
+        assert_eq!(removed, vec!["gps/#"]);
     }
 }

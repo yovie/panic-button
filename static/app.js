@@ -70,6 +70,19 @@
     rawRefresh: document.getElementById('raw-refresh'),
     rawClearDevice: document.getElementById('raw-clear-device'),
     rawPayloadList: document.getElementById('raw-payload-list'),
+    topicsBtn: document.getElementById('topics-btn'),
+    topicsOverlay: document.getElementById('topics-overlay'),
+    topicsClose: document.getElementById('topics-close'),
+    topicsBaseline: document.getElementById('topics-baseline'),
+    topicsStatus: document.getElementById('topics-status'),
+    topicsWarning: document.getElementById('topics-warning'),
+    topicsCount: document.getElementById('topics-count'),
+    topicsList: document.getElementById('topics-list'),
+    topicForm: document.getElementById('topic-form'),
+    topicInput: document.getElementById('topic-input'),
+    topicLabel: document.getElementById('topic-label'),
+    topicError: document.getElementById('topic-error'),
+    topicSubmit: document.getElementById('topic-submit'),
     deviceForm: document.getElementById('device-form'),
     formError: document.getElementById('form-error'),
     formSubmit: document.getElementById('form-submit'),
@@ -110,6 +123,7 @@
     rawDevices: [],
     rawSelectedKey: null,
     rawPayloads: [],
+    topics: { baseline: [], custom: [], effective: [], mqtt_enabled: false, mqtt_connected: false },
   };
 
   function escapeHtml(value) {
@@ -753,6 +767,121 @@
     els.rawOverlay.classList.add('hidden');
   }
 
+  function showTopicError(message) {
+    els.topicError.textContent = message;
+    els.topicError.classList.remove('hidden');
+  }
+
+  function hideTopicError() {
+    els.topicError.textContent = '';
+    els.topicError.classList.add('hidden');
+  }
+
+  function renderTopics() {
+    const data = state.topics;
+    els.topicsBaseline.innerHTML = data.baseline.length
+      ? data.baseline.map((topic) => `<span class="topic-chip">${escapeHtml(topic)}</span>`).join('')
+      : '<span class="empty-inline">Tidak ada topik baseline.</span>';
+    els.topicsStatus.textContent = !data.mqtt_enabled
+      ? 'MQTT nonaktif'
+      : data.mqtt_connected
+        ? 'Terhubung'
+        : 'Terputus';
+    els.topicsStatus.className = `chip ${data.mqtt_enabled && data.mqtt_connected ? 'topic-status-live' : 'topic-status-offline'}`;
+    if (data.baseline.includes('#') || data.effective.includes('#')) {
+      els.topicsWarning.textContent = 'Topik # aktif: semua topik sudah tercakup, topik tambahan tidak menambah subscription.';
+      els.topicsWarning.classList.remove('hidden');
+    } else {
+      els.topicsWarning.classList.add('hidden');
+    }
+    els.topicsCount.textContent = String(data.custom.length);
+    if (!data.custom.length) {
+      els.topicsList.innerHTML = '<li class="empty">Belum ada topik tambahan.</li>';
+      return;
+    }
+    els.topicsList.innerHTML = data.custom.map((item) => `
+      <li class="topic-item">
+        <div class="topic-item-main">
+          <strong>${escapeHtml(item.topic)}</strong>
+          ${item.label ? `<span class="topic-label">${escapeHtml(item.label)}</span>` : ''}
+        </div>
+        <div class="topic-item-meta">
+          <span class="tag ${item.active ? 'accent' : ''}">${item.active ? 'Aktif' : 'Tercakup'}</span>
+          <button class="btn ghost danger-text topic-delete" type="button" data-topic="${escapeHtml(item.topic)}">Hapus</button>
+        </div>
+      </li>`).join('');
+  }
+
+  async function refreshTopics() {
+    try {
+      const response = await fetch('/api/topics');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      state.topics = await response.json();
+      renderTopics();
+    } catch (error) {
+      console.error('Gagal memuat topik MQTT', error);
+      showTopicError('Gagal memuat topik MQTT. Coba lagi.');
+    }
+  }
+
+  async function openTopics() {
+    els.topicsOverlay.classList.remove('hidden');
+    hideTopicError();
+    await refreshTopics();
+    els.topicInput.focus();
+  }
+
+  function closeTopics() {
+    els.topicsOverlay.classList.add('hidden');
+  }
+
+  async function addTopic(event) {
+    event.preventDefault();
+    hideTopicError();
+    const topic = els.topicInput.value.trim();
+    const label = els.topicLabel.value.trim();
+    if (!topic) {
+      showTopicError('Topik wajib diisi.');
+      return;
+    }
+    els.topicSubmit.disabled = true;
+    try {
+      const response = await fetch('/api/topics', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ topic, label: label || null }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+      state.topics = await response.json();
+      els.topicInput.value = '';
+      els.topicLabel.value = '';
+      renderTopics();
+      els.topicInput.focus();
+    } catch (error) {
+      showTopicError(error.message || 'Gagal menambah topik.');
+    } finally {
+      els.topicSubmit.disabled = false;
+    }
+  }
+
+  async function deleteTopic(topic) {
+    if (!window.confirm(`Hapus topik ${topic}?`)) return;
+    hideTopicError();
+    try {
+      const response = await fetch(`/api/topics?topic=${encodeURIComponent(topic)}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+      state.topics = await response.json();
+      renderTopics();
+    } catch (error) {
+      showTopicError(error.message || 'Gagal menghapus topik.');
+    }
+  }
   function collectFormPayload() {
     const latText = els.fields.lat.value.trim();
     const lonText = els.fields.lon.value.trim();
@@ -1014,6 +1143,17 @@
     els.fields.id.focus();
   });
 
+  els.topicsBtn.addEventListener('click', () => openTopics());
+  els.topicsClose.addEventListener('click', closeTopics);
+  els.topicsOverlay.addEventListener('click', (event) => {
+    if (event.target === els.topicsOverlay) closeTopics();
+  });
+  els.topicForm.addEventListener('submit', addTopic);
+  els.topicsList.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-topic]');
+    if (button) deleteTopic(button.dataset.topic);
+  });
+
   els.rawBtn.addEventListener('click', () => openRaw());
   els.rawClose.addEventListener('click', closeRaw);
   els.rawRefresh.addEventListener('click', () => refreshRawList());
@@ -1060,6 +1200,7 @@
     if (event.key !== 'Escape') return;
     if (!els.manageOverlay.classList.contains('hidden')) closeManage();
     else if (!els.rawOverlay.classList.contains('hidden')) closeRaw();
+    else if (!els.topicsOverlay.classList.contains('hidden')) closeTopics();
   });
 
   setInterval(() => {
@@ -1068,6 +1209,7 @@
     updateAlert();
     if (!els.manageOverlay.classList.contains('hidden')) renderManageList();
     if (!els.rawOverlay.classList.contains('hidden')) refreshRawList().catch(() => {});
+    if (!els.topicsOverlay.classList.contains('hidden')) refreshTopics().catch(() => {});
   }, 5000);
 
   renderSidebar();

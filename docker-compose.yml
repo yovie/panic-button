@@ -13,7 +13,7 @@ services:
       RUST_LOG: "${RUST_LOG:-info}"
       MQTT_ENABLED: "${MQTT_ENABLED:-true}"
       MQTT_URL: "${MQTT_URL:-mqtt://mosquitto:1883}"
-      MQTT_TOPIC: "${MQTT_TOPIC:-msh/#}"
+      MQTT_TOPIC: "${MQTT_TOPIC:-#}"
       MQTT_TRACKING_TOPIC: "${MQTT_TRACKING_TOPIC:-gps/#}"
       PANIC_KEYWORD: "${PANIC_KEYWORD:-PANIC,SOS}"
       MESHTASTIC_PSK: "${MESHTASTIC_PSK:-AQ==}"

@@ -17,9 +17,11 @@ pub struct MqttConfig {
 impl MqttConfig {
     pub fn subscription_topics(&self) -> Vec<&str> {
         let mut topics = Vec::new();
-        let topic = self.topic.trim();
-        if !topic.is_empty() {
-            topics.push(topic);
+        for topic in self.topic.split(',') {
+            let topic = topic.trim();
+            if !topic.is_empty() && !topics.contains(&topic) {
+                topics.push(topic);
+            }
         }
 
         let tracking = self.tracking_topic.trim();
@@ -377,6 +379,13 @@ mod tests {
     }
 
     #[test]
+    fn supports_comma_separated_topics() {
+        let config = config("msh/#, owntracks/#", "gps/#");
+        let topics = config.subscription_topics();
+        assert_eq!(topics, vec!["msh/#", "owntracks/#", "gps/#"]);
+    }
+
+    #[test]
     fn deduplicates_identical_topics() {
         let config = config("gps/#", "gps/#");
         let topics = config.subscription_topics();
@@ -384,8 +393,15 @@ mod tests {
     }
 
     #[test]
+    fn deduplicates_topics_in_list() {
+        let config = config("msh/#, msh/#", "gps/#");
+        let topics = config.subscription_topics();
+        assert_eq!(topics, vec!["msh/#", "gps/#"]);
+    }
+
+    #[test]
     fn ignores_empty_topics() {
-        let config = config(" ", "");
+        let config = config(" , ", " ");
         let topics = config.subscription_topics();
         assert!(topics.is_empty());
     }

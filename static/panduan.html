@@ -763,10 +763,11 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
         <p>
           Gateway mempublikasikan JSON ke
           <code>msh/&lt;region&gt;/2/json/&lt;channel&gt;/&lt;userid&gt;</code>.
-          Server berlangganan <code>msh/#</code> (<code>MQTT_TOPIC</code>) untuk Meshtastic
-          dan <code>gps/#</code> (<code>MQTT_TRACKING_TOPIC</code>) untuk data tracking GPS,
-          lalu menurunkan Device ID Meshtastic dari field <code>from</code> (desimal)
-          menjadi <code>!xxxxxxxx</code>.
+          Server berlangganan <code>MQTT_TOPIC</code> (default <code>#</code>, mencakup
+          <code>msh/#</code> dan <code>owntracks/#</code>) serta
+          <code>MQTT_TRACKING_TOPIC</code> (default <code>gps/#</code>, dipakai saat
+          <code>MQTT_TOPIC</code> dibatasi), lalu menurunkan Device ID Meshtastic dari
+          field <code>from</code> (desimal) menjadi <code>!xxxxxxxx</code>.
         </p>
 
         <div class="guide-table-wrap">

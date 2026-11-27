@@ -335,7 +335,7 @@ make deploy-staging STAGING_PORT=18081 STAGING_MQTT_PORT=11883
    - Server: untuk dev gunakan `mqtt.jokocloud.my.id` port `8883` dengan TLS aktif;
      untuk publik gunakan IP/domain VPS port `1883` (plaintext) atau `8883` (TLS)
      setelah port dibuka
-   - Username/password: `meshtastic` dan isi `mosquitto/.mqtt-password` untuk dev;
+   - Username/password: `user` dan isi `mosquitto/.mqtt-password` untuk dev;
      untuk broker publik gunakan kredensial broker Anda
    - Uplink: aktif
    - Channel/region: sesuaikan dengan mesh Anda
@@ -601,7 +601,7 @@ gitignored:
 
 - `mosquitto/certs/server.crt` dan `server.key` — self-signed, SAN `mqtt.jokocloud.my.id`,
   `localhost`, dan `127.0.0.1`.
-- `mosquitto/passwd` — hash password untuk user `meshtastic`.
+- `mosquitto/passwd` — hash password untuk user `user`.
 - `mosquitto/.mqtt-password` — password plaintext; baca dengan
   `cat mosquitto/.mqtt-password`.
 
@@ -611,7 +611,7 @@ Tes subscribe lewat TLS:
 docker exec -it panic-button-mosquitto-1 mosquitto_sub \
   -h 127.0.0.1 -p 8883 \
   --cafile /mosquitto/certs/server.crt \
-  -u meshtastic -P "$(cat mosquitto/.mqtt-password)" \
+  -u user -P "$(cat mosquitto/.mqtt-password)" \
   -t 'msh/+/2/json/+/#' -v
 ```
 
@@ -621,7 +621,7 @@ Tes publish posisi lewat TLS:
 docker exec -it panic-button-mosquitto-1 mosquitto_pub \
   -h 127.0.0.1 -p 8883 \
   --cafile /mosquitto/certs/server.crt \
-  -u meshtastic -P "$(cat mosquitto/.mqtt-password)" \
+  -u user -P "$(cat mosquitto/.mqtt-password)" \
   -t 'msh/ID/2/json/Panic/!test' \
   -m '{"from":53261,"type":"position","payload":{"latitude_i":-62000000,"longitude_i":1068000000}}'
 ```

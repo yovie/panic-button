@@ -7,7 +7,7 @@ CERT_DIR="$MOSQUITTO_DIR/certs"
 PASSWORD_FILE="$MOSQUITTO_DIR/.mqtt-password"
 PASSWD_FILE="$MOSQUITTO_DIR/passwd"
 MQTT_HOSTNAME="${MQTT_HOSTNAME:-mqtt.jokocloud.my.id}"
-MQTT_USERNAME="${MQTT_USERNAME:-meshtastic}"
+MQTT_USERNAME="${MQTT_USERNAME:-user}"
 IMAGE="${MOSQUITTO_IMAGE:-eclipse-mosquitto:2}"
 
 mkdir -p "$CERT_DIR"

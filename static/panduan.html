@@ -617,7 +617,7 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
           <li>Gunakan gateway berbasis <strong>ESP32</strong> (T-Beam, Heltec V3, T-Deck, dll). Board nRF52 seperti RAK dan T-Echo tidak menyediakan modul MQTT.</li>
           <li>Firmware <strong>2.7.x</strong> dengan <em>JSON Output</em> aktif, atau firmware <strong>2.8+</strong> yang mengirim protobuf. Server mendukung topik JSON <code>/2/json/</code> maupun protobuf <code>/2/e/</code> dan legacy <code>/2/c/</code>.</li>
           <li>Gateway punya koneksi jaringan ke broker, baik langsung, lewat VPN, maupun melalui <em>MQTT Client Proxy</em> di HP.</li>
-          <li>Untuk listener <code>8883</code>: username <code>meshtastic</code> dan password dari <code>mosquitto/.mqtt-password</code> (dibuat dengan <code>make mqtt-setup</code>).</li>
+          <li>Untuk listener <code>8883</code>: username <code>user</code> dan password dari <code>mosquitto/.mqtt-password</code> (dibuat dengan <code>make mqtt-setup</code>).</li>
         </ul>
 
         <h3>Format pesan: JSON vs protobuf</h3>
@@ -684,7 +684,7 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
               </tr>
               <tr>
                 <td>Username / Password</td>
-                <td><code>meshtastic</code> / isi <code>mosquitto/.mqtt-password</code></td>
+                <td><code>user</code> / isi <code>mosquitto/.mqtt-password</code></td>
                 <td>Hanya untuk listener 8883. Jangan aktifkan anonymous di gateway.</td>
               </tr>
               <tr>
@@ -722,7 +722,7 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
            <li>Buka <strong>Settings → Module config → MQTT</strong>, aktifkan MQTT.</li>
            <li>Jika node tidak punya internet sendiri, aktifkan <strong>MQTT Client Proxy</strong> agar HP meneruskan trafik.</li>
            <li>Isi Address dengan URI lengkap <code>wss://mqtt-panic-button.jokocloud.my.id</code>.</li>
-           <li>Isi username <code>meshtastic</code> dan password dari <code>mosquitto/.mqtt-password</code>.</li>
+           <li>Isi username <code>user</code> dan password dari <code>mosquitto/.mqtt-password</code>.</li>
            <li>Aktifkan uplink/downlink pada channel, lalu <strong>Save &amp; Send</strong>.</li>
            <li>Pastikan Cloudflare memiliki route WSS ke listener <code>9001</code> sebelum koneksi diuji.</li>
          </ol>
@@ -740,7 +740,7 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
           <pre><code>docker exec -it panic-button-mosquitto-1 mosquitto_sub \
   -h 127.0.0.1 -p 8883 \
   --cafile /mosquitto/certs/server.crt \
-  -u meshtastic -P "$(cat mosquitto/.mqtt-password)" \
+  -u user -P "$(cat mosquitto/.mqtt-password)" \
   -t 'msh/+/2/json/+/#' -v</code></pre>
         </div>
         <p>
@@ -754,7 +754,7 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
           <pre><code>docker exec -it panic-button-mosquitto-1 mosquitto_pub \
   -h 127.0.0.1 -p 8883 \
   --cafile /mosquitto/certs/server.crt \
-  -u meshtastic -P "$(cat mosquitto/.mqtt-password)" \
+  -u user -P "$(cat mosquitto/.mqtt-password)" \
   -t 'msh/ID/2/json/Panic/!test' \
   -m '{"from":53261,"type":"position","payload":{"latitude_i":-62000000,"longitude_i":1068000000}}'</code></pre>
         </div>

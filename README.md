@@ -21,6 +21,7 @@ Leaflet + OpenStreetMap, semua berjalan lewat Docker Compose.
 - Ingest Meshtastic via MQTT (JSON dan protobuf: nodeinfo, position, telemetry,
   detection_sensor, text/alert keyword), termasuk listener TLS 8883 dengan
   username/password untuk development.
+- Ingest data tracking GPS via MQTT pada topik `gps/#` (default `MQTT_TRACKING_TOPIC`).
 - Ingest HTTP generik untuk perangkat lain/simulator.
 - Menu **Data Mentah**: mencatat payload MQTT/HTTP yang tidak cocok dengan adapter atau
   gagal diproses (decode/dekripsi), dikelompokkan per device dengan history payload,
@@ -338,9 +339,10 @@ make deploy-staging STAGING_PORT=18081 STAGING_MQTT_PORT=11883
      untuk broker publik gunakan kredensial broker Anda
    - Uplink: aktif
    - Channel/region: sesuaikan dengan mesh Anda
-3. Server berlangganan wildcard `#` secara default, sehingga menerima JSON maupun
+3. Server berlangganan `msh/#` secara default, sehingga menerima JSON maupun
    protobuf. Untuk membatasi, set `MQTT_TOPIC`, misal `msh/ID/2/#` atau
-   `msh/ID/2/json/Panic/#`.
+   `msh/ID/2/json/Panic/#`. Data tracking GPS memakai `MQTT_TRACKING_TOPIC`
+   (default `gps/#`).
 4. Server mendukung dua format MQTT Meshtastic:
    - **JSON** (`msh/<region>/2/json/<channel>/<node>`) untuk firmware 2.7.x dengan
      *JSON Output* aktif.
@@ -394,6 +396,23 @@ sesuai aturan firmware Meshtastic.
 > untuk broker remote. Jika domain publik hanya mengekspos port 443, gateway tidak bisa
 > terhubung langsung — gunakan VPN/MQTT Client Proxy atau buka port MQTT dengan
 > pembatasan firewall.
+
+### Tracking GPS via MQTT
+
+Data tracking GPS masuk lewat topik `gps/#` (default `MQTT_TRACKING_TOPIC`).
+Publish ke `gps` atau `gps/<device_id>` dengan payload JSON minimal `lat` dan
+`lon`:
+
+```bash
+mosquitto_pub -h localhost -p 1883 -t 'gps/truck-01' \
+  -m '{"device_id":"truck-01","lat":-6.2,"lon":106.8,"speed_kmh":12,"heading":90,"battery":88}'
+```
+
+Device ID diambil dari field `device_id`, `id`, `deviceid`, `device`, `imei`,
+atau `tracker`; jika tidak ada, server memakai segmen terakhir topik
+(`truck-01`). Adapter akan membuat device bertipe `tracker` dengan protokol
+`generic_mqtt`. Server tetap berlangganan topik Meshtastic (`MQTT_TOPIC`,
+default `msh/#`) secara terpisah.
 
 ## API
 
@@ -513,7 +532,8 @@ memperbarui registry dan menyiarkan `update`/`removed` via WebSocket.
 | `RUST_LOG` | `info` | Level log server |
 | `MQTT_ENABLED` | `true` | Aktifkan subscriber Meshtastic |
 | `MQTT_URL` | `mqtt://mosquitto:1883` | URL broker |
-| `MQTT_TOPIC` | `#` | Topik langganan (universal adapter) |
+| `MQTT_TOPIC` | `msh/#` | Topik langganan Meshtastic (universal adapter) |
+| `MQTT_TRACKING_TOPIC` | `gps/#` | Topik langganan data tracking GPS |
 | `PANIC_KEYWORD` | `PANIC,SOS` | Keyword teks pemicu panic |
 | `MESHTASTIC_PSK` | `AQ==` | PSK channel protobuf, base64; pisahkan dengan koma untuk beberapa channel |
 | `DEVICES_FILE` | `data/devices.json` | Lokasi penyimpanan konfigurasi device |

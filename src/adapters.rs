@@ -765,17 +765,18 @@ async fn connect_and_poll(
 ) -> anyhow::Result<()> {
     let mut options = MqttOptions::new(&config.client_id, &broker.host, broker.port);
     options.set_keep_alive(Duration::from_secs(30));
-    options.set_clean_session(false);
+    options.set_clean_session(true);
 
     if let Some(username) = &broker.username {
         options.set_credentials(username, broker.password.as_deref().unwrap_or(""));
     }
 
     let (client, mut eventloop) = AsyncClient::new(options, 64);
+    let topics = config.subscription_topics();
     info!(
         host = %broker.host,
         port = broker.port,
-        topic = %config.topic,
+        topics = %topics.join(", "),
         "connecting universal MQTT adapter subscriber"
     );
 
@@ -784,10 +785,13 @@ async fn connect_and_poll(
     loop {
         match eventloop.poll().await {
             Ok(Event::Incoming(Packet::ConnAck(_))) => {
-                client
-                    .subscribe(config.topic.clone(), QoS::AtLeastOnce)
-                    .await?;
-                info!(topic = %config.topic, "subscribed universal MQTT adapter topic");
+                for topic in &topics {
+                    client.subscribe(*topic, QoS::AtLeastOnce).await?;
+                }
+                info!(
+                    topics = %topics.join(", "),
+                    "subscribed universal MQTT adapter topics"
+                );
             }
             Ok(Event::Incoming(Packet::Publish(publish))) => {
                 let mut applied = false;

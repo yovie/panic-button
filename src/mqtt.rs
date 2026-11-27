@@ -9,8 +9,30 @@ use tracing::{debug, info, warn};
 pub struct MqttConfig {
     pub url: String,
     pub topic: String,
+    pub tracking_topic: String,
     pub panic_keywords: Vec<String>,
     pub client_id: String,
+}
+
+impl MqttConfig {
+    pub fn subscription_topics(&self) -> Vec<&str> {
+        let mut topics = Vec::new();
+        let topic = self.topic.trim();
+        if !topic.is_empty() {
+            topics.push(topic);
+        }
+
+        let tracking = self.tracking_topic.trim();
+        if !tracking.is_empty()
+            && !topics
+                .iter()
+                .any(|existing| *existing == "#" || *existing == tracking)
+        {
+            topics.push(tracking);
+        }
+
+        topics
+    }
 }
 
 pub struct BrokerAddress {
@@ -56,7 +78,7 @@ async fn connect_and_poll(
 ) -> anyhow::Result<()> {
     let mut options = MqttOptions::new(&config.client_id, &broker.host, broker.port);
     options.set_keep_alive(Duration::from_secs(30));
-    options.set_clean_session(false);
+    options.set_clean_session(true);
 
     if let Some(username) = &broker.username {
         options.set_credentials(username, broker.password.as_deref().unwrap_or(""));
@@ -328,5 +350,43 @@ mod tests {
             registry.device("!0000c001").await.unwrap().status,
             Status::Normal
         );
+    }
+
+    fn config(topic: &str, tracking_topic: &str) -> MqttConfig {
+        MqttConfig {
+            url: "mqtt://localhost:1883".to_string(),
+            topic: topic.to_string(),
+            tracking_topic: tracking_topic.to_string(),
+            panic_keywords: Vec::new(),
+            client_id: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn subscribes_to_meshtastic_and_tracking_topics() {
+        let config = config("msh/#", "gps/#");
+        let topics = config.subscription_topics();
+        assert_eq!(topics, vec!["msh/#", "gps/#"]);
+    }
+
+    #[test]
+    fn skips_tracking_topic_when_wildcard_covers_it() {
+        let config = config("#", "gps/#");
+        let topics = config.subscription_topics();
+        assert_eq!(topics, vec!["#"]);
+    }
+
+    #[test]
+    fn deduplicates_identical_topics() {
+        let config = config("gps/#", "gps/#");
+        let topics = config.subscription_topics();
+        assert_eq!(topics, vec!["gps/#"]);
+    }
+
+    #[test]
+    fn ignores_empty_topics() {
+        let config = config(" ", "");
+        let topics = config.subscription_topics();
+        assert!(topics.is_empty());
     }
 }

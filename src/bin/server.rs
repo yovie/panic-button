@@ -86,7 +86,8 @@ async fn main() -> anyhow::Result<()> {
             .collect();
         let config = mqtt::MqttConfig {
             url: env_or("MQTT_URL", "mqtt://localhost:1883"),
-            topic: env_or("MQTT_TOPIC", "#"),
+            topic: env_or("MQTT_TOPIC", "msh/#"),
+            tracking_topic: env_or("MQTT_TRACKING_TOPIC", "gps/#"),
             panic_keywords: panic_keywords.clone(),
             client_id: format!("panic-button-{}", std::process::id()),
         };

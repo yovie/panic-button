@@ -763,8 +763,10 @@ curl -X DELETE https://panic-button.jokocloud.my.id/api/devices/!a1b2c3d4</code>
         <p>
           Gateway mempublikasikan JSON ke
           <code>msh/&lt;region&gt;/2/json/&lt;channel&gt;/&lt;userid&gt;</code>.
-          Server berlangganan wildcard <code>msh/+/2/json/+/#</code>, lalu menurunkan
-          Device ID dari field <code>from</code> (desimal) menjadi <code>!xxxxxxxx</code>.
+          Server berlangganan <code>msh/#</code> (<code>MQTT_TOPIC</code>) untuk Meshtastic
+          dan <code>gps/#</code> (<code>MQTT_TRACKING_TOPIC</code>) untuk data tracking GPS,
+          lalu menurunkan Device ID Meshtastic dari field <code>from</code> (desimal)
+          menjadi <code>!xxxxxxxx</code>.
         </p>
 
         <div class="guide-table-wrap">
@@ -1064,6 +1066,11 @@ cargo run --bin simulator -- \
                 <td>Cek topik <code>/2/json/</code> atau <code>/2/e/</code>, konektivitas broker, kredensial 8883, dan <code>MESHTASTIC_PSK</code>. Untuk PKI, minta node mengirim broadcast di channel biasa.</td>
               </tr>
               <tr>
+                <td>Tracker GPS MQTT tidak muncul</td>
+                <td>Topik bukan <code>gps/#</code> atau payload tidak memiliki <code>lat</code>/<code>lon</code>.</td>
+                <td>Publish ke <code>gps/&lt;device_id&gt;</code> atau sesuaikan <code>MQTT_TRACKING_TOPIC</code>.</td>
+              </tr>
+              <tr>
                 <td>MQTT terhubung tapi data kosong</td>
                 <td>Channel uplink mati atau root topic berbeda.</td>
                 <td>Aktifkan uplink dan samakan root topic/region/channel.</td>
@@ -1151,11 +1158,20 @@ cargo run --bin simulator -- \
               </tr>
               <tr>
                 <td>Generic</td>
-                <td>MQTT atau HTTP auto</td>
+                <td>MQTT topik <code>gps/&lt;device_id&gt;</code> atau HTTP auto</td>
                 <td><code>lat</code> + <code>lon</code> + <code>id/device_id/deviceid</code></td>
               </tr>
             </tbody>
           </table>
+        </div>
+        <div class="callout info">
+          <div>
+            <strong>Tracking GPS via MQTT</strong>
+            Publish JSON ke <code>gps</code> atau <code>gps/&lt;device_id&gt;</code>, misalnya
+            <code>{"device_id":"truck-01","lat":-6.2,"lon":106.8}</code>. Jika
+            <code>device_id</code> tidak ada, ID diambil dari segmen terakhir topik.
+            Topik langganan dapat diubah lewat <code>MQTT_TRACKING_TOPIC</code>.
+          </div>
         </div>
         <div class="callout info">
           <div>
